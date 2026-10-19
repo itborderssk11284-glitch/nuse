@@ -8,14 +8,18 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { DailyRecord, StandardWeightsConfig } from '../types/nursing';
 import { AppUser } from '../types/auth';
 
-// Read environment variables
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+// Default Supabase project configuration for Sangkhlaburi Hospital (itborderssk11284-glitch)
+const DEFAULT_SUPABASE_URL = 'https://ekuuywpvnwxxpdoyjqgb.supabase.co';
+const DEFAULT_SUPABASE_ANON_KEY = 'sb_publishable_nC77SFH80PoLqWK0Ty53rg_O2fa6scd';
+
+// Read environment variables with automatic fallback
+const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || DEFAULT_SUPABASE_URL;
+const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || DEFAULT_SUPABASE_ANON_KEY;
 
 let cachedClient: SupabaseClient | null = null;
 
 /**
- * Check whether Supabase environment variables are configured
+ * Check whether Supabase is configured
  */
 export function isSupabaseConfigured(): boolean {
   return (
