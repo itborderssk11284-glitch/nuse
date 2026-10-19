@@ -1,0 +1,159 @@
+@import "tailwindcss";
+
+/* Enable class-based Dark Mode in Tailwind v4 */
+@variant dark (&:where(.dark, .dark *));
+
+/* Eye-care Font Scaling (สเกลขนาดหน้าจอและตัวอักษรเพื่อความสบายตา) */
+html {
+  font-size: 15px;
+  scroll-behavior: smooth;
+}
+
+html[data-font-scale="comfort"] {
+  font-size: 16.5px;
+}
+
+html[data-font-scale="large"] {
+  font-size: 18px;
+}
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+  
+  html.dark {
+    color-scheme: dark;
+  }
+
+  body {
+    transition: background-color 0.2s ease, color 0.2s ease;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  * {
+    border-color: var(--border, rgb(226 232 240 / 0.8));
+  }
+
+  html.dark * {
+    border-color: var(--border, rgb(30 41 59 / 0.9));
+  }
+}
+
+/* Eye-care soft cards & elevation */
+.eye-care-card {
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* High-legibility numbers for clinical metrics */
+.font-metric {
+  font-feature-settings: "tnum" 1, "cv05" 1;
+}
+
+/* Smooth custom scrollbars for medical dashboards */
+::-webkit-scrollbar {
+  width: 7px;
+  height: 7px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.5);
+  border-radius: 9999px;
+}
+.dark ::-webkit-scrollbar-thumb {
+  background: rgba(71, 85, 105, 0.6);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.8);
+}
+
+/* Custom Print Layout for Official Hospital Report - Exact A4 Calibration */
+@page {
+  size: A4 portrait;
+  margin: 8mm 10mm 8mm 10mm;
+}
+
+@page a4-landscape {
+  size: A4 landscape;
+  margin: 8mm 10mm 8mm 10mm;
+}
+
+@media print {
+  @page {
+    size: A4 portrait;
+    margin: 8mm 10mm 8mm 10mm;
+  }
+
+  html, body {
+    width: 210mm !important;
+    height: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background-color: #ffffff !important;
+    color: #000000 !important;
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+    font-size: 11px !important;
+    line-height: 1.35 !important;
+  }
+
+  /* Hide all interactive app bars, navigation, footers */
+  .no-print, header, nav, aside, footer {
+    display: none !important;
+  }
+
+  .print-only {
+    display: block !important;
+  }
+
+  /* A4 Printable Sheet Container */
+  .a4-print-sheet {
+    width: 100% !important;
+    max-width: 190mm !important;
+    margin: 0 auto !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    box-sizing: border-box !important;
+  }
+
+  .a4-single-page {
+    page-break-after: avoid !important;
+    break-after: avoid !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  .page-break-after {
+    page-break-after: always !important;
+    break-after: page !important;
+  }
+
+  .page-break-inside-avoid {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  table {
+    page-break-inside: auto;
+    border-collapse: collapse !important;
+    width: 100% !important;
+  }
+
+  tr {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+
+  thead {
+    display: table-header-group !important;
+  }
+
+  tfoot {
+    display: table-footer-group !important;
+  }
+}

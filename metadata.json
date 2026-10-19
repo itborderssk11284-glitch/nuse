@@ -1,0 +1,6 @@
+{
+  "name": "ระบบคำนวณค่างานและอัตรากำลังพยาบาล - รพ.สังขละบุรี",
+  "description": "ระบบคำนวณค่างานและวิเคราะห์อัตรากำลังพยาบาล (Nursing Workload & Staffing Calculation System) 4 แผนกหลัก ER, OPD, IPD, LR โรงพยาบาลสังขละบุรี",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
