@@ -10,13 +10,19 @@
  * 4. หน้า Login / สมัครเข้าใช้งานระบบ ก่อนเข้าบันทึกข้อมูลหน้าเว็ป
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AppUser, UserRole, UserDepartment, ROLE_LABELS, DEPARTMENT_LABELS } from '../types/auth';
 import {
   authenticateUser,
   registerNewUser,
   loadAllUsers,
+  saveAllUsers,
 } from '../utils/authStorage';
+import {
+  isSupabaseConfigured,
+  fetchUsersFromSupabase,
+  saveUserToSupabase,
+} from '../utils/supabase';
 import { HospitalLogo } from './HospitalLogo';
 import {
   LogIn,
@@ -40,6 +46,8 @@ import {
   Mail,
   Building2,
   Lock,
+  Database,
+  RefreshCw,
 } from 'lucide-react';
 
 interface AuthScreenProps {
@@ -76,8 +84,33 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   const [regError, setRegError] = useState<string | null>(null);
   const [regSuccess, setRegSuccess] = useState<string | null>(null);
 
+  // Supabase cloud user sync states
+  const [isSyncingSupabase, setIsSyncingSupabase] = useState(false);
+  const [supabaseUsersCount, setSupabaseUsersCount] = useState<number | null>(null);
+
+  // Auto-sync users from Supabase on mount so ANY computer can login immediately
+  useEffect(() => {
+    if (isSupabaseConfigured()) {
+      setIsSyncingSupabase(true);
+      fetchUsersFromSupabase()
+        .then((remoteUsers) => {
+          if (remoteUsers.length > 0) {
+            saveAllUsers(remoteUsers);
+            setSupabaseUsersCount(remoteUsers.length);
+            setAuthTab('login');
+          }
+        })
+        .catch((err) => {
+          console.error('Failed to load users from Supabase:', err);
+        })
+        .finally(() => {
+          setIsSyncingSupabase(false);
+        });
+    }
+  }, []);
+
   // Handle Login submission
-  const handleLoginSubmit = (e: React.FormEvent) => {
+  const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError(null);
 
@@ -86,7 +119,26 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
       return;
     }
 
-    const user = authenticateUser(loginUsername, loginPassword);
+    // 1. Try local authentication first
+    let user = authenticateUser(loginUsername, loginPassword);
+
+    // 2. If not found locally, fetch fresh from Supabase to support cross-device logins
+    if (!user && isSupabaseConfigured()) {
+      setIsSyncingSupabase(true);
+      try {
+        const remoteUsers = await fetchUsersFromSupabase();
+        if (remoteUsers.length > 0) {
+          saveAllUsers(remoteUsers);
+          setSupabaseUsersCount(remoteUsers.length);
+          user = authenticateUser(loginUsername, loginPassword);
+        }
+      } catch (err) {
+        console.error('Failed to sync users during login:', err);
+      } finally {
+        setIsSyncingSupabase(false);
+      }
+    }
+
     if (!user) {
       setLoginError('ชื่อผู้ใช้งานหรือรหัสผ่านไม่ถูกต้อง (หากยังไม่มีบัญชี กรุณากดแท็บ สมัครเข้าใช้งานระบบ)');
       return;
@@ -139,6 +191,13 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
       return;
     }
 
+    // Auto-sync newly created user to Supabase
+    if (result.user && isSupabaseConfigured()) {
+      saveUserToSupabase(result.user).catch((e) =>
+        console.error('Failed to sync new user to Supabase:', e)
+      );
+    }
+
     if (result.user) {
       setRegSuccess('สมัครสมาชิกสำเร็จ กำลังเข้าสู่ระบบ...');
       setTimeout(() => {
@@ -175,9 +234,25 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
               <HospitalLogo size={56} />
             </div>
             <div className="flex-1">
-              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-700/60 border border-emerald-400/30 text-emerald-100 text-xs font-medium mb-1.5">
-                <ShieldCheck className="w-3.5 h-3.5 text-emerald-300" />
-                <span>ระบบยืนยันตัวตนและกำหนดสิทธิการเข้าถึง (RBAC)</span>
+              <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
+                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-700/60 border border-emerald-400/30 text-emerald-100 text-xs font-medium">
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-300" />
+                  <span>ระบบยืนยันตัวตนและกำหนดสิทธิการเข้าถึง (RBAC)</span>
+                </div>
+                {isSupabaseConfigured() && (
+                  <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-950/80 border border-emerald-400/40 text-emerald-200 text-xs font-semibold shadow-xs">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                    <span>Supabase Cloud ออนไลน์</span>
+                    {supabaseUsersCount !== null && (
+                      <span className="text-[10px] bg-emerald-800/80 px-1.5 py-0.5 rounded-full font-mono">
+                        {supabaseUsersCount} บัญชี
+                      </span>
+                    )}
+                    {isSyncingSupabase && (
+                      <RefreshCw className="w-3 h-3 animate-spin text-emerald-300" />
+                    )}
+                  </div>
+                )}
               </div>
               <h1 className="text-lg sm:text-2xl font-bold tracking-tight">
                 Sangkhlaburi Hospital Smart Workload System

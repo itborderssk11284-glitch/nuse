@@ -28,8 +28,8 @@ import { ReportsView } from './components/ReportsView';
 import { CalculationReferenceModal } from './components/CalculationReferenceModal';
 import { SettingsModal } from './components/SettingsModal';
 import { HospitalLogo } from './components/HospitalLogo';
-import { AppUser, ROLE_LABELS, DEPARTMENT_LABELS } from './types/auth';
-import { getCurrentSessionUser, setCurrentSessionUser, clearAllTestUsers } from './utils/authStorage';
+import { AppUser } from './types/auth';
+import { getCurrentSessionUser, setCurrentSessionUser, clearAllTestUsers, saveAllUsers } from './utils/authStorage';
 import { AuthScreen } from './components/AuthScreen';
 import { UserManagementModal } from './components/UserManagementModal';
 import {
@@ -39,6 +39,7 @@ import {
   deleteRecordFromSupabase,
   fetchStandardsFromSupabase,
   saveStandardsToSupabase,
+  fetchUsersFromSupabase,
 } from './utils/supabase';
 import {
   MapPin,
@@ -167,6 +168,7 @@ export default function App() {
         if (remoteRecords.length > 0) {
           setRecords(remoteRecords);
           saveRecords(remoteRecords);
+          setSelectedDate(remoteRecords[0].date);
         }
       });
       fetchStandardsFromSupabase().then((remoteStds) => {
@@ -175,8 +177,26 @@ export default function App() {
           saveStandards(remoteStds);
         }
       });
+      fetchUsersFromSupabase().then((remoteUsers) => {
+        if (remoteUsers.length > 0) {
+          saveAllUsers(remoteUsers);
+        }
+      });
     }
   }, []);
+
+  // Re-sync latest records from Supabase whenever user logs in
+  useEffect(() => {
+    if (appUser && isSupabaseConfigured()) {
+      fetchRecordsFromSupabase().then((remoteRecords) => {
+        if (remoteRecords.length > 0) {
+          setRecords(remoteRecords);
+          saveRecords(remoteRecords);
+          setSelectedDate(remoteRecords[0].date);
+        }
+      });
+    }
+  }, [appUser]);
 
   // Find or create current active record
   const currentRecord = React.useMemo(() => {
