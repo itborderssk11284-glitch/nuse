@@ -614,14 +614,14 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                 <div className="space-y-6">
                   <div>ลงชื่อ..........................................................</div>
                   <div>
-                    <p className="font-semibold">(พว. กัลยา วัฒนเวช)</p>
+                    <p className="font-semibold">(พว. หวานเพ็ญ   สาลี)</p>
                     <p className="text-gray-600 text-[9px]">หัวหน้ากลุ่มงานการพยาบาล</p>
                   </div>
                 </div>
                 <div className="space-y-6">
                   <div>ลงชื่อ..........................................................</div>
                   <div>
-                    <p className="font-semibold">(นายแพทย์กฤษดา วงศ์ดีเลิศ)</p>
+                    <p className="font-semibold">(นายแพทย์จิรวัฒน์   วงษ์สวัสดิ์)</p>
                     <p className="text-gray-600 text-[9px]">ผู้อำนวยการโรงพยาบาลสังขละบุรี</p>
                   </div>
                 </div>
@@ -1067,7 +1067,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                         <div className="space-y-7">
                           <div>ลงชื่อ..........................................................</div>
                           <div>
-                            <p className="font-semibold">(พว. กัลยา วัฒนเวช)</p>
+                            <p className="font-semibold">(พว. หวานเพ็ญ   สาลี)</p>
                             <p className="text-slate-600 text-[9.5px]">หัวหน้ากลุ่มงานการพยาบาล</p>
                             <p className="text-slate-400 text-[9px]">วันที่ ....../....../......</p>
                           </div>
@@ -1076,7 +1076,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                         <div className="space-y-7">
                           <div>ลงชื่อ..........................................................</div>
                           <div>
-                            <p className="font-semibold">(นายแพทย์กฤษดา วงศ์ดีเลิศ)</p>
+                            <p className="font-semibold">(นายแพทย์จิรวัฒน์   วงษ์สวัสดิ์)</p>
                             <p className="text-slate-600 text-[9.5px]">ผู้อำนวยการโรงพยาบาลสังขละบุรี</p>
                             <p className="text-slate-400 text-[9px]">วันที่ ....../....../......</p>
                           </div>
@@ -1167,14 +1167,14 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                         <div className="space-y-6">
                           <div>ลงชื่อ..........................................................</div>
                           <div>
-                            <p className="font-semibold">(พว. กัลยา วัฒนเวช)</p>
+                            <p className="font-semibold">(พว. หวานเพ็ญ   สาลี)</p>
                             <p className="text-slate-600 text-[9.5px]">หัวหน้ากลุ่มงานการพยาบาล</p>
                           </div>
                         </div>
                         <div className="space-y-6">
                           <div>ลงชื่อ..........................................................</div>
                           <div>
-                            <p className="font-semibold">(นายแพทย์กฤษดา วงศ์ดีเลิศ)</p>
+                            <p className="font-semibold">(นายแพทย์จิรวัฒน์   วงษ์สวัสดิ์)</p>
                             <p className="text-slate-600 text-[9.5px]">ผู้อำนวยการโรงพยาบาลสังขละบุรี</p>
                           </div>
                         </div>
