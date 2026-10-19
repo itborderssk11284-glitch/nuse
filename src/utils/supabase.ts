@@ -278,7 +278,8 @@ export async function fetchUsersFromSupabase(): Promise<AppUser[]> {
       avatarColor: u.avatar_color || 'bg-emerald-600',
       phone: u.phone || '',
       password: u.password_hash || undefined,
-      isActive: u.is_active !== false,
+      isActive: u.is_active === true,
+      isApproved: u.is_active === true,
       createdAt: u.created_at || new Date().toISOString(),
     }));
   } catch (err) {

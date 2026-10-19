@@ -30,6 +30,7 @@ export interface AppUser {
   phone?: string;
   email?: string;
   isActive: boolean;
+  isApproved?: boolean;
   createdAt: string;
   avatarColor?: string;
 }

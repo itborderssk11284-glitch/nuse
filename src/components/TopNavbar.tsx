@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { AppUser, ROLE_LABELS, DEPARTMENT_LABELS } from '../types/auth';
 import { isSupabaseConfigured } from '../utils/supabase';
+import { loadAllUsers } from '../utils/authStorage';
 
 export type ActiveTab = 'dashboard' | 'entry' | 'reports' | 'standards';
 
@@ -146,13 +147,19 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
                 <button
                   type="button"
                   onClick={onOpenUserManagement}
-                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs xl:text-sm font-semibold transition-all bg-purple-50 dark:bg-purple-950/40 text-purple-800 dark:text-purple-300 hover:bg-purple-100 dark:hover:bg-purple-900/50 border border-purple-200 dark:border-purple-800 cursor-pointer ml-1"
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs xl:text-sm font-semibold transition-all bg-purple-50 dark:bg-purple-950/40 text-purple-800 dark:text-purple-300 hover:bg-purple-100 dark:hover:bg-purple-900/50 border border-purple-200 dark:border-purple-800 cursor-pointer ml-1 relative"
                 >
                   <Users className="w-4 h-4 text-purple-600 dark:text-purple-400" />
                   <span>จัดการผู้ใช้งาน</span>
-                  <span className="text-[9px] px-1.5 py-0.2 rounded-md bg-purple-200 dark:bg-purple-800 text-purple-900 dark:text-purple-100 font-bold">
-                    Admin
-                  </span>
+                  {loadAllUsers().filter((u) => u.isApproved === false || (!u.isActive && u.isApproved !== true)).length > 0 ? (
+                    <span className="flex items-center gap-1 text-[9.5px] px-1.5 py-0.5 rounded-full bg-amber-500 text-white font-bold animate-pulse shadow-xs">
+                      รออนุมัติ ({loadAllUsers().filter((u) => u.isApproved === false || (!u.isActive && u.isApproved !== true)).length})
+                    </span>
+                  ) : (
+                    <span className="text-[9px] px-1.5 py-0.2 rounded-md bg-purple-200 dark:bg-purple-800 text-purple-900 dark:text-purple-100 font-bold">
+                      Admin
+                    </span>
+                  )}
                 </button>
               )}
             </nav>
@@ -371,10 +378,17 @@ export const TopNavbar: React.FC<TopNavbarProps> = ({
                     onOpenUserManagement();
                     setIsMobileMenuOpen(false);
                   }}
-                  className="w-full flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-semibold bg-purple-50 dark:bg-purple-950/40 text-purple-800 dark:text-purple-300 border border-purple-200 dark:border-purple-800"
+                  className="w-full flex items-center justify-between px-3.5 py-2.5 rounded-xl text-sm font-semibold bg-purple-50 dark:bg-purple-950/40 text-purple-800 dark:text-purple-300 border border-purple-200 dark:border-purple-800"
                 >
-                  <Users className="w-4 h-4 text-purple-600" />
-                  <span>จัดการผู้ใช้งานระบบ (Admin)</span>
+                  <div className="flex items-center gap-3">
+                    <Users className="w-4 h-4 text-purple-600" />
+                    <span>จัดการผู้ใช้งานระบบ (Admin)</span>
+                  </div>
+                  {loadAllUsers().filter((u) => u.isApproved === false || (!u.isActive && u.isApproved !== true)).length > 0 && (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500 text-white font-bold animate-pulse">
+                      รออนุมัติ {loadAllUsers().filter((u) => u.isApproved === false || (!u.isActive && u.isApproved !== true)).length}
+                    </span>
+                  )}
                 </button>
               )}
             </div>

@@ -14,6 +14,7 @@ import React, { useState, useEffect } from 'react';
 import { AppUser, UserRole, UserDepartment, ROLE_LABELS, DEPARTMENT_LABELS } from '../types/auth';
 import {
   authenticateUser,
+  verifyUserLogin,
   registerNewUser,
   loadAllUsers,
   saveAllUsers,
@@ -48,6 +49,7 @@ import {
   Lock,
   Database,
   RefreshCw,
+  Clock,
 } from 'lucide-react';
 
 interface AuthScreenProps {
@@ -119,18 +121,18 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
       return;
     }
 
-    // 1. Try local authentication first
-    let user = authenticateUser(loginUsername, loginPassword);
+    // 1. Try local verification first
+    let authRes = verifyUserLogin(loginUsername, loginPassword);
 
     // 2. If not found locally, fetch fresh from Supabase to support cross-device logins
-    if (!user && isSupabaseConfigured()) {
+    if (authRes.status === 'not_found' && isSupabaseConfigured()) {
       setIsSyncingSupabase(true);
       try {
         const remoteUsers = await fetchUsersFromSupabase();
         if (remoteUsers.length > 0) {
           saveAllUsers(remoteUsers);
           setSupabaseUsersCount(remoteUsers.length);
-          user = authenticateUser(loginUsername, loginPassword);
+          authRes = verifyUserLogin(loginUsername, loginPassword);
         }
       } catch (err) {
         console.error('Failed to sync users during login:', err);
@@ -139,12 +141,27 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
       }
     }
 
-    if (!user) {
-      setLoginError('ชื่อผู้ใช้งานหรือรหัสผ่านไม่ถูกต้อง (หากยังไม่มีบัญชี กรุณากดแท็บ สมัครเข้าใช้งานระบบ)');
+    if (authRes.status === 'pending_approval') {
+      setLoginError(`⏳ ${authRes.message}`);
       return;
     }
 
-    onLoginSuccess(user);
+    if (authRes.status === 'inactive') {
+      setLoginError(`🚫 ${authRes.message}`);
+      return;
+    }
+
+    if (authRes.status === 'invalid_password') {
+      setLoginError('รหัสผ่านไม่ถูกต้อง กรุณาตรวจสอบอีกครั้ง');
+      return;
+    }
+
+    if (authRes.status === 'not_found' || !authRes.user) {
+      setLoginError('ไม่พบชื่อผู้ใช้งานในระบบ (หากยังไม่มีบัญชี กรุณากดแท็บ "สมัครเข้าใช้งานระบบ" ด้านบน)');
+      return;
+    }
+
+    onLoginSuccess(authRes.user);
   };
 
   // Handle Registration submission
@@ -198,7 +215,17 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
       );
     }
 
-    if (result.user) {
+    if (result.requiresApproval) {
+      setRegSuccess(
+        `ลงทะเบียนสำเร็จเรียบร้อย! 🎉 ข้อมูลบัญชี "${regName}" (@${regUsername}) ถูกส่งไปยังผู้ดูแลระบบ (Admin) แล้ว กรุณารอรับการอนุมัติสิทธิ์ก่อนจึงจะสามารถเข้าสู่ระบบได้`
+      );
+      // Clear fields
+      setRegName('');
+      setRegUsername('');
+      setRegPassword('');
+      setRegPhone('');
+      setRegEmail('');
+    } else if (result.user) {
       setRegSuccess('สมัครสมาชิกสำเร็จ กำลังเข้าสู่ระบบ...');
       setTimeout(() => {
         onLoginSuccess(result.user!);
@@ -653,20 +680,31 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                 </p>
               </div>
 
+              {/* Approval Notice */}
+              <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 text-xs text-amber-900 dark:text-amber-200 flex items-start gap-2.5">
+                <Clock className="w-4 h-4 shrink-0 text-amber-600 dark:text-amber-400 mt-0.5" />
+                <div className="space-y-0.5">
+                  <p className="font-bold">เงื่อนไขการอนุมัติสิทธิ์การเข้าใช้งาน (Admin Approval Required)</p>
+                  <p className="text-[11.5px] text-amber-800 dark:text-amber-300 leading-relaxed">
+                    เพื่อความถูกต้องและปลอดภัยของข้อมูลทางการพยาบาล ผู้สมัครใหม่จะต้องได้รับ <strong>การอนุมัติสิทธิ์จากผู้ดูแลระบบ (Admin)</strong> ก่อน จึงจะสามารถเข้าสู่ระบบได้
+                  </p>
+                </div>
+              </div>
+
               <div className="flex items-center justify-end gap-3 pt-2">
                 <button
                   type="button"
                   onClick={() => setAuthTab('login')}
-                  className="px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold transition-all"
+                  className="px-4 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 text-xs font-semibold transition-all cursor-pointer"
                 >
-                  ยกเลิก / กลับไปเข้าสู่ระบบ
+                  ยกเลิก / ไปหน้าเข้าสู่ระบบ
                 </button>
                 <button
                   type="submit"
                   className="px-6 py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold shadow-md shadow-emerald-900/20 flex items-center gap-2 transition-all cursor-pointer"
                 >
-                  <UserCheck className="w-4 h-4" />
-                  <span>ยืนยันสมัครสมาชิกและเข้าสู่ระบบทันที</span>
+                  <UserPlus className="w-4 h-4" />
+                  <span>ส่งคำขอสมัครเข้าใช้งาน (รอ Admin อนุมัติ)</span>
                 </button>
               </div>
             </form>

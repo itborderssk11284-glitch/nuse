@@ -11,6 +11,7 @@ import {
   updateUser,
   deleteUser,
   registerNewUser,
+  approveUser,
 } from '../utils/authStorage';
 import {
   isSupabaseConfigured,
@@ -29,6 +30,9 @@ import {
   Check,
   AlertTriangle,
   Lock,
+  UserCheck,
+  Clock,
+  UserX,
 } from 'lucide-react';
 
 interface UserManagementModalProps {
@@ -102,6 +106,30 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
     }
   };
 
+  const handleApprove = (targetUser: AppUser) => {
+    const approved = approveUser(targetUser.id);
+    if (approved) {
+      if (isSupabaseConfigured()) {
+        saveUserToSupabase(approved);
+      }
+      setActionSuccess(`อนุมัติสิทธิ์การเข้าใช้งานให้ "${approved.name}" (@${approved.username}) เรียบร้อยแล้ว`);
+      setTimeout(() => setActionSuccess(null), 3500);
+      reload();
+    }
+  };
+
+  const handleReject = (targetUser: AppUser) => {
+    if (window.confirm(`ปฏิเสธคำขอสมัครและลบบัญชี "${targetUser.name}" (@${targetUser.username}) ออกจากระบบหรือไม่?`)) {
+      deleteUser(targetUser.id);
+      if (isSupabaseConfigured()) {
+        deleteUserFromSupabase(targetUser.id);
+      }
+      setActionSuccess(`ปฏิเสธและลบคำขอสมัครของ "${targetUser.name}" เรียบร้อยแล้ว`);
+      setTimeout(() => setActionSuccess(null), 3500);
+      reload();
+    }
+  };
+
   const handleAddNewSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setFormError(null);
@@ -118,6 +146,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
       role: newRole,
       department: finalDept,
       phone: newPhone,
+      autoApprove: true,
     });
 
     if (!res.success) {
@@ -174,6 +203,104 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
           <div className="mx-5 mt-3 p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-300 text-xs flex items-center gap-2">
             <CheckCircle2 className="w-4 h-4 shrink-0" />
             <span>{actionSuccess}</span>
+          </div>
+        )}
+
+        {/* Pending Approval Panel for Admin */}
+        {users.filter((u) => u.isApproved === false || (!u.isActive && u.isApproved !== true)).length > 0 && (
+          <div className="mx-4 sm:mx-5 mt-3 p-3.5 rounded-2xl bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-700/60 shadow-xs space-y-2.5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="flex h-2.5 w-2.5 relative">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500"></span>
+                </span>
+                <span className="font-bold text-xs text-amber-900 dark:text-amber-200 flex items-center gap-1.5">
+                  <Clock className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                  <span>
+                    คำขอสมัครสมาชิกใหม่ รอการอนุมัติสิทธิ์ (
+                    {users.filter((u) => u.isApproved === false || (!u.isActive && u.isApproved !== true)).length} รายการ)
+                  </span>
+                </span>
+              </div>
+              <span className="text-[10px] text-amber-800 dark:text-amber-300 font-semibold bg-amber-100 dark:bg-amber-900/60 px-2 py-0.5 rounded-md">
+                Admin ต้องอนุมัติก่อนจึงจะเข้าใช้งานได้
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+              {users
+                .filter((u) => u.isApproved === false || (!u.isActive && u.isApproved !== true))
+                .map((pUser) => {
+                  const rMeta = ROLE_LABELS[pUser.role];
+                  const dMeta = DEPARTMENT_LABELS[pUser.department];
+                  return (
+                    <div
+                      key={pUser.id}
+                      className="p-3 rounded-xl bg-white dark:bg-slate-900 border border-amber-200 dark:border-amber-800/60 shadow-xs flex flex-col justify-between gap-2.5"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-center gap-2.5">
+                          <span className="w-8 h-8 rounded-lg bg-amber-500 text-white flex items-center justify-center font-bold text-xs shadow-xs">
+                            {pUser.name.slice(0, 1)}
+                          </span>
+                          <div>
+                            <div className="font-bold text-xs text-slate-800 dark:text-slate-100">
+                              {pUser.name}
+                            </div>
+                            <div className="text-[11px] text-slate-500 dark:text-slate-400 font-mono">
+                              @{pUser.username} {pUser.position && `• ${pUser.position}`}
+                            </div>
+                            {pUser.phone && (
+                              <div className="text-[10px] text-slate-400">
+                                โทร: {pUser.phone}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex flex-col items-end gap-1">
+                          <span className={`text-[9.5px] px-2 py-0.5 rounded-md font-semibold border ${rMeta.color}`}>
+                            {rMeta.badge}
+                          </span>
+                          <span className="text-[9.5px] font-medium text-slate-600 dark:text-slate-400">
+                            {dMeta?.short || pUser.department}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-end gap-2 pt-1 border-t border-slate-100 dark:border-slate-800">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingUser(pUser);
+                            setIsAddingNew(false);
+                          }}
+                          className="px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 text-[11px] font-medium flex items-center gap-1 transition-all cursor-pointer"
+                        >
+                          <Edit2 className="w-3 h-3 text-amber-600" />
+                          <span>ปรับสิทธิ์</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleReject(pUser)}
+                          className="px-2.5 py-1 rounded-lg border border-rose-200 dark:border-rose-900 text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-[11px] font-medium flex items-center gap-1 transition-all cursor-pointer"
+                        >
+                          <UserX className="w-3 h-3" />
+                          <span>ปฏิเสธ</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleApprove(pUser)}
+                          className="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[11px] font-bold flex items-center gap-1 transition-all shadow-xs cursor-pointer"
+                        >
+                          <Check className="w-3.5 h-3.5" />
+                          <span>อนุมัติการใช้งาน</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
           </div>
         )}
 
@@ -386,14 +513,24 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                 </select>
               </div>
               <div>
-                <label className="block text-[11px] font-semibold mb-1">สถานะการใช้งาน</label>
+                <label className="block text-[11px] font-semibold mb-1">สถานะการใช้งาน / การอนุมัติ</label>
                 <select
-                  value={editingUser.isActive ? 'active' : 'inactive'}
-                  onChange={(e) => setEditingUser({ ...editingUser, isActive: e.target.value === 'active' })}
+                  value={editingUser.isApproved === false ? 'pending' : (editingUser.isActive ? 'active' : 'inactive')}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val === 'active') {
+                      setEditingUser({ ...editingUser, isActive: true, isApproved: true });
+                    } else if (val === 'pending') {
+                      setEditingUser({ ...editingUser, isActive: false, isApproved: false });
+                    } else {
+                      setEditingUser({ ...editingUser, isActive: false, isApproved: true });
+                    }
+                  }}
                   className="w-full px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs"
                 >
-                  <option value="active">เปิดใช้งาน (Active)</option>
-                  <option value="inactive">ระงับการใช้งานชั่วคราว (Inactive)</option>
+                  <option value="active">เปิดใช้งาน (อนุมัติแล้ว)</option>
+                  <option value="pending">รอการอนุมัติ (Pending Approval)</option>
+                  <option value="inactive">ระงับการใช้งานชั่วคราว (Suspended)</option>
                 </select>
               </div>
               <div>
@@ -483,17 +620,35 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                       </td>
 
                       <td className="py-2.5 px-3 text-center">
-                        <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                          user.isActive
-                            ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
-                            : 'bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300'
-                        }`}>
-                          {user.isActive ? 'เปิดใช้งาน' : 'ระงับ'}
-                        </span>
+                        {user.isApproved === false || (!user.isActive && user.isApproved !== true) ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-950/80 dark:text-amber-300 border border-amber-300 dark:border-amber-700 shadow-2xs">
+                            <Clock className="w-3 h-3 animate-pulse text-amber-600 dark:text-amber-400" />
+                            <span>รออนุมัติ</span>
+                          </span>
+                        ) : (
+                          <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                            user.isActive
+                              ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
+                              : 'bg-rose-100 text-rose-700 dark:bg-rose-950 dark:text-rose-300'
+                          }`}>
+                            {user.isActive ? 'เปิดใช้งาน' : 'ระงับ'}
+                          </span>
+                        )}
                       </td>
 
                       <td className="py-2.5 px-3 text-right">
                         <div className="inline-flex items-center gap-1">
+                          {(user.isApproved === false || (!user.isActive && user.isApproved !== true)) && (
+                            <button
+                              type="button"
+                              onClick={() => handleApprove(user)}
+                              title="อนุมัติสิทธิ์เข้าใช้งาน"
+                              className="px-2 py-0.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-[10.5px] font-bold flex items-center gap-1 transition-all shadow-xs mr-1 cursor-pointer"
+                            >
+                              <Check className="w-3 h-3" />
+                              <span>อนุมัติ</span>
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => {
@@ -501,7 +656,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                               setIsAddingNew(false);
                             }}
                             title="แก้ไขสิทธิ์/ข้อมูล"
-                            className="p-1 rounded-lg text-slate-500 hover:text-amber-600 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                            className="p-1 rounded-lg text-slate-500 hover:text-amber-600 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
                           >
                             <Edit2 className="w-3.5 h-3.5" />
                           </button>
@@ -510,7 +665,7 @@ export const UserManagementModal: React.FC<UserManagementModalProps> = ({
                               type="button"
                               onClick={() => handleDelete(user)}
                               title="ลบผู้ใช้"
-                              className="p-1 rounded-lg text-slate-500 hover:text-rose-600 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                              className="p-1 rounded-lg text-slate-500 hover:text-rose-600 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
                             >
                               <Trash2 className="w-3.5 h-3.5" />
                             </button>

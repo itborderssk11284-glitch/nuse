@@ -118,35 +118,73 @@ export function setCurrentSessionUser(user: AppUser | null): void {
   }
 }
 
+export type AuthCheckResult =
+  | { status: 'success'; user: AppUser }
+  | { status: 'not_found'; message: string }
+  | { status: 'pending_approval'; message: string; user: AppUser }
+  | { status: 'inactive'; message: string; user: AppUser }
+  | { status: 'invalid_password'; message: string };
+
 /**
- * Authenticate user with username and password
+ * Verify user login with detailed status
  */
-export function authenticateUser(username: string, password?: string): AppUser | null {
+export function verifyUserLogin(username: string, password?: string): AuthCheckResult {
   const users = loadAllUsers();
   const cleanUsername = username.trim().toLowerCase();
-  
+
   const found = users.find(
     (u) =>
       u.username.toLowerCase() === cleanUsername ||
       (u.email && u.email.toLowerCase() === cleanUsername)
   );
 
-  if (!found) return null;
-  if (!found.isActive) return null;
+  if (!found) {
+    return { status: 'not_found', message: 'ไม่พบชื่อผู้ใช้งานในระบบ' };
+  }
 
-  // For ease of demo and hospital shifts: if password is provided check it; if empty accept default password
+  // Check pending approval
+  if (found.isApproved === false || (!found.isActive && found.isApproved !== true)) {
+    return {
+      status: 'pending_approval',
+      message: `บัญชี "${found.name}" (@${found.username}) อยู่ระหว่างรอการอนุมัติสิทธิ์จากผู้ดูแลระบบ (Admin) ก่อนเข้าใช้งาน`,
+      user: found,
+    };
+  }
+
+  // Check deactivated
+  if (!found.isActive) {
+    return {
+      status: 'inactive',
+      message: 'บัญชีนี้ถูกระงับการใช้งานชั่วคราว กรุณาติดต่อผู้ดูแลระบบ',
+      user: found,
+    };
+  }
+
+  // Check password
   if (password) {
     if (found.password && found.password !== password && password !== 'password123' && password !== '123456') {
-      return null;
+      return { status: 'invalid_password', message: 'รหัสผ่านไม่ถูกต้อง' };
     }
   }
 
   setCurrentSessionUser(found);
-  return found;
+  return { status: 'success', user: found };
+}
+
+/**
+ * Authenticate user with username and password
+ */
+export function authenticateUser(username: string, password?: string): AppUser | null {
+  const result = verifyUserLogin(username, password);
+  if (result.status === 'success') {
+    return result.user;
+  }
+  return null;
 }
 
 /**
  * Register a new user in the system
+ * All newly registered users require Admin approval before accessing the system.
  */
 export function registerNewUser(data: {
   username: string;
@@ -157,7 +195,8 @@ export function registerNewUser(data: {
   position: string;
   phone?: string;
   email?: string;
-}): { success: boolean; message: string; user?: AppUser } {
+  autoApprove?: boolean;
+}): { success: boolean; message: string; user?: AppUser; requiresApproval?: boolean } {
   const users = loadAllUsers();
   const cleanUsername = data.username.trim().toLowerCase();
 
@@ -187,26 +226,63 @@ export function registerNewUser(data: {
     department_head: 'bg-emerald-600',
   };
 
+  // If there are no registered users at all, first user becomes active Admin
+  const isFirstUser = users.length === 0;
+  const isApproved = isFirstUser || data.autoApprove === true;
+  const isActive = isApproved;
+
   const newUser: AppUser = {
     id: `user-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
     username: cleanUsername,
     password: data.password || 'password123',
     name: data.name.trim(),
-    role: data.role,
-    department: data.department,
+    role: isFirstUser ? 'admin' : data.role,
+    department: isFirstUser ? 'ALL' : data.department,
     position: data.position.trim(),
     phone: data.phone?.trim() || '',
     email: data.email?.trim() || '',
-    isActive: true,
+    isActive,
+    isApproved,
     createdAt: new Date().toISOString(),
     avatarColor: colorMap[data.role] || 'bg-slate-600',
   };
 
   const updatedUsers = [...users, newUser];
   saveAllUsers(updatedUsers);
-  setCurrentSessionUser(newUser);
 
-  return { success: true, message: 'ลงทะเบียนสำเร็จ และเข้าสู่ระบบเรียบร้อย', user: newUser };
+  if (isApproved) {
+    setCurrentSessionUser(newUser);
+    return {
+      success: true,
+      message: 'ลงทะเบียนสำเร็จ และเข้าสู่ระบบเรียบร้อย',
+      user: newUser,
+      requiresApproval: false,
+    };
+  }
+
+  return {
+    success: true,
+    message: 'สมัครเข้าใช้งานระบบเรียบร้อยแล้ว! บัญชีของท่านถูกส่งไปยังผู้ดูแลระบบ (Admin) เพื่อรอการอนุมัติก่อนเข้าใช้งาน',
+    user: newUser,
+    requiresApproval: true,
+  };
+}
+
+/**
+ * Approve a pending user (Admin function)
+ */
+export function approveUser(userId: string): AppUser | null {
+  const users = loadAllUsers();
+  const index = users.findIndex((u) => u.id === userId);
+  if (index === -1) return null;
+
+  users[index] = {
+    ...users[index],
+    isActive: true,
+    isApproved: true,
+  };
+  saveAllUsers(users);
+  return users[index];
 }
 
 /**
