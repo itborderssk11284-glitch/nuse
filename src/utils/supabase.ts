@@ -5,7 +5,7 @@
  */
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { DailyRecord, StandardWeightsConfig } from '../types/nursing';
+import { DailyRecord, StandardWeightsConfig, ActivityTemplate } from '../types/nursing';
 import { AppUser } from '../types/auth';
 
 // Default Supabase project configuration for Sangkhlaburi Hospital (itborderssk11284-glitch)
@@ -254,6 +254,64 @@ export async function saveStandardsToSupabase(config: StandardWeightsConfig): Pr
 }
 
 /**
+ * Fetch master activity templates (Part 2: Indirect Care & Part 3: Support Work) from Supabase
+ */
+export async function fetchActivityTemplatesFromSupabase(): Promise<ActivityTemplate[] | null> {
+  const client = getSupabaseClient();
+  if (!client) return null;
+
+  try {
+    const { data, error } = await client
+      .from('standards_config')
+      .select('config')
+      .eq('id', 'activity_templates')
+      .maybeSingle();
+
+    if (error || !data || !data.config || !Array.isArray(data.config.templates)) {
+      return null;
+    }
+    return data.config.templates as ActivityTemplate[];
+  } catch (err) {
+    console.error('Error in fetchActivityTemplatesFromSupabase:', err);
+    return null;
+  }
+}
+
+/**
+ * Save master activity templates (Part 2 & Part 3) to Supabase
+ */
+export async function saveActivityTemplatesToSupabase(templates: ActivityTemplate[]): Promise<boolean> {
+  const client = getSupabaseClient();
+  if (!client) return false;
+
+  try {
+    const { error } = await client
+      .from('standards_config')
+      .upsert(
+        {
+          id: 'activity_templates',
+          config: {
+            templates,
+            count: templates.length,
+            updatedAt: new Date().toISOString(),
+          },
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: 'id' }
+      );
+
+    if (error) {
+      console.error('Failed to save activity templates to Supabase:', error);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error('Error in saveActivityTemplatesToSupabase:', err);
+    return false;
+  }
+}
+
+/**
  * Fetch users from Supabase
  */
 export async function fetchUsersFromSupabase(): Promise<AppUser[]> {
@@ -406,11 +464,22 @@ export async function syncAllLocalToSupabase(): Promise<{
       if (ok) usersSynced++;
     }
 
+    // 4. Activity Templates (งานรอง และ งานสนับสนุน)
+    const rawTemplates = localStorage.getItem('sangkhlaburi_activity_templates_v2');
+    let templatesSynced = 0;
+    if (rawTemplates) {
+      const localTemplates: ActivityTemplate[] = JSON.parse(rawTemplates);
+      if (Array.isArray(localTemplates) && localTemplates.length > 0) {
+        const ok = await saveActivityTemplatesToSupabase(localTemplates);
+        if (ok) templatesSynced = localTemplates.length;
+      }
+    }
+
     return {
       success: true,
       recordsCount: recordsSynced,
       usersCount: usersSynced,
-      message: `ซิงค์ข้อมูลไปยัง Supabase สำเร็จ (เวร ${recordsSynced} รายการ, ผู้ใช้ ${usersSynced} บัญชี)`,
+      message: `ซิงค์ข้อมูลไปยัง Supabase สำเร็จ (เวร ${recordsSynced} รายการ, ผู้ใช้ ${usersSynced} บัญชี, ประเภทงาน ${templatesSynced} รายการ)`,
     };
   } catch (err: any) {
     return {

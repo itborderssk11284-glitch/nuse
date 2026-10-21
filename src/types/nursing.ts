@@ -28,6 +28,7 @@ export interface IndirectCareItem {
   unitTimeMinutes: number;     // เวลามาตรฐานต่อหน่วย (นาที)
   unitLabel?: string;          // หน่วย เช่น ราย, ครั้ง, เวร
   note?: string;               // รายละเอียดเพิ่มเติม
+  templateId?: string;         // รหัสอ้างอิงแม่แบบส่วนกลาง
 }
 
 // โครงสร้างประเภทงานสนับสนุน (Support Work Item)
@@ -40,6 +41,28 @@ export interface SupportWorkItem {
   frequencyCount: number;      // จำนวนครั้งตามช่วงเวลา
   timeMinutesPerSession: number; // เวลาที่ใช้จริงต่อกิจกรรม (นาที)
   note?: string;               // รายละเอียดเพิ่มเติม
+  templateId?: string;         // รหัสอ้างอิงแม่แบบส่วนกลาง
+}
+
+export type WorkloadPartType = 'indirect' | 'support';
+
+// แม่แบบประเภทกิจกรรมงานรองและงานสนับสนุนส่วนกลาง (Master Activity Template)
+// จัดเก็บในฐานข้อมูล Supabase เพื่อเชื่อมโยง (Link) กับทุกวันที่บันทึก
+export interface ActivityTemplate {
+  id: string;
+  department: DepartmentKey | 'ALL';
+  workloadPart: WorkloadPartType;
+  name: string;
+  category: string;
+  unitTimeMinutes: number;
+  unitLabel: string;
+  frequencyType?: 'daily' | 'weekly' | 'monthly' | 'custom';
+  defaultFrequencyCount?: number;
+  note?: string;
+  isActive: boolean;
+  isSystemDefault?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 // Emergency Department Data Model

@@ -3,7 +3,14 @@
  * Configured with 3-Part Workload Model (Direct, Indirect, Support)
  */
 
-import { DailyRecord, StandardWeightsConfig } from '../types/nursing';
+import {
+  DailyRecord,
+  StandardWeightsConfig,
+  ActivityTemplate,
+  DepartmentKey,
+  IndirectCareItem,
+  SupportWorkItem,
+} from '../types/nursing';
 import {
   DEFAULT_STANDARDS,
   createDefaultIndirectItems,
@@ -12,6 +19,7 @@ import {
 
 const STORAGE_KEY_RECORDS = 'sangkhlaburi_nursing_records_v2';
 const STORAGE_KEY_STANDARDS = 'sangkhlaburi_nursing_standards_v2';
+const STORAGE_KEY_TEMPLATES = 'sangkhlaburi_activity_templates_v2';
 const STORAGE_KEY_THEME = 'sangkhlaburi_nursing_theme';
 
 export function formatDateISO(d: Date): string {
@@ -21,8 +29,379 @@ export function formatDateISO(d: Date): string {
   return `${year}-${month}-${day}`;
 }
 
+/**
+ * แม่แบบประเภทกิจกรรมส่วนกลางเริ่มต้น (Master Activity Catalog Presets)
+ * โรงพยาบาลสังขละบุรี
+ */
+export const DEFAULT_ACTIVITY_TEMPLATES: ActivityTemplate[] = [
+  // --- ส่วนที่ 2: งานรอง (Indirect Care) ---
+  {
+    id: 'tpl-ind-doc',
+    department: 'ALL',
+    workloadPart: 'indirect',
+    name: 'บันทึกชาร์จและเวชระเบียน (Documentation & Focus Note)',
+    category: 'documentation',
+    unitTimeMinutes: 12,
+    unitLabel: 'ราย',
+    note: 'เขียนชาร์จ สรุปอาการ Focus Note ประเมินทางการพยาบาล',
+    isActive: true,
+    isSystemDefault: true,
+  },
+  {
+    id: 'tpl-ind-med',
+    department: 'ALL',
+    workloadPart: 'indirect',
+    name: 'จัดเตรียมยาและสารน้ำ (Medication Preparation & 7 Rights)',
+    category: 'medication',
+    unitTimeMinutes: 5,
+    unitLabel: 'ครั้ง',
+    note: 'จัดเตรียมยา ตรวจสอบ 7 Rights ตรวจสอบฉลากและสารน้ำ',
+    isActive: true,
+    isSystemDefault: true,
+  },
+  {
+    id: 'tpl-ind-coord',
+    department: 'ALL',
+    workloadPart: 'indirect',
+    name: 'ติดต่อประสานงานและส่งต่อ (Care Coordination & Referral)',
+    category: 'coordination',
+    unitTimeMinutes: 15,
+    unitLabel: 'เคส',
+    note: 'รับใหม่ จำหน่าย ส่งต่อ ตามผล Lab / X-Ray / แพทย์เวร',
+    isActive: true,
+    isSystemDefault: true,
+  },
+  {
+    id: 'tpl-ind-handover',
+    department: 'ALL',
+    workloadPart: 'indirect',
+    name: 'การส่งมอบเวรและรายงานข้ามกะ (Shift Handover & Endorsement)',
+    category: 'handover',
+    unitTimeMinutes: 35,
+    unitLabel: 'เวร',
+    note: 'ส่งมอบข้อมูลผู้ป่วยข้ามเวร เช้า-บ่าย-ดึก',
+    isActive: true,
+    isSystemDefault: true,
+  },
+  {
+    id: 'tpl-ind-er-triage',
+    department: 'ER',
+    workloadPart: 'indirect',
+    name: 'คัดกรองซักประวัติและระบุระดับฉุกเฉิน (Triage Assessment)',
+    category: 'documentation',
+    unitTimeMinutes: 8,
+    unitLabel: 'ราย',
+    note: 'วัด V/S คัดกรองอาการนำ ประเมิน Triage ระดับ 1-5',
+    isActive: true,
+    isSystemDefault: true,
+  },
+  {
+    id: 'tpl-ind-discharge',
+    department: 'ALL',
+    workloadPart: 'indirect',
+    name: 'วางแผนจำหน่ายและสุขศึกษาผู้ป่วย (D/C Planning & Health Edu)',
+    category: 'documentation',
+    unitTimeMinutes: 20,
+    unitLabel: 'ราย',
+    note: 'วางแผนจำหน่าย ให้คำแนะนำยา การดูแลแผล การนัดตรวจต่อเนื่อง',
+    isActive: true,
+    isSystemDefault: true,
+  },
+  {
+    id: 'tpl-ind-lr-parto',
+    department: 'LR',
+    workloadPart: 'indirect',
+    name: 'บันทึกกราฟความก้าวหน้าการคลอด (Partograph Recording)',
+    category: 'documentation',
+    unitTimeMinutes: 15,
+    unitLabel: 'เคส',
+    note: 'บันทึก FHS, Uterine Contraction, Cervical Dilation ในห้องคลอด',
+    isActive: true,
+    isSystemDefault: true,
+  },
+  {
+    id: 'tpl-ind-proc-set',
+    department: 'ALL',
+    workloadPart: 'indirect',
+    name: 'จัดเตรียมชุดหัตถการและอุปกรณ์ปลอดเชื้อ (Procedure Set Prep)',
+    category: 'medication',
+    unitTimeMinutes: 10,
+    unitLabel: 'ชุด',
+    note: 'เตรียม Set ทำแผล, Set ให้สารน้ำ, Set เจาะเลือด/ใส่สายสวน',
+    isActive: true,
+    isSystemDefault: true,
+  },
+
+  // --- ส่วนที่ 3: งานสนับสนุน (Support Work / Ward Management) ---
+  {
+    id: 'tpl-sup-ward',
+    department: 'ALL',
+    workloadPart: 'support',
+    name: 'บริหารจัดการหอผู้ป่วยและตรวจเวร (Ward Management & Briefing)',
+    category: 'ward_management',
+    frequencyType: 'daily',
+    defaultFrequencyCount: 1,
+    unitTimeMinutes: 20,
+    unitLabel: 'วัน',
+    note: 'จัดสรรเตียง มอบหมายภาระงาน ตรวจความพร้อมหอผู้ป่วย',
+    isActive: true,
+    isSystemDefault: true,
+  },
+  {
+    id: 'tpl-sup-equip',
+    department: 'ALL',
+    workloadPart: 'support',
+    name: 'ตรวจเช็ครถช่วยชีวิตและเครื่องมือแพทย์ (Emergency Cart & Defib)',
+    category: 'equipment_check',
+    frequencyType: 'daily',
+    defaultFrequencyCount: 1,
+    unitTimeMinutes: 25,
+    unitLabel: 'วัน',
+    note: 'ตรวจยาและเวชภัณฑ์ CPR, เครื่อง Defibrillator, Suction, Oxygen',
+    isActive: true,
+    isSystemDefault: true,
+  },
+  {
+    id: 'tpl-sup-ic',
+    department: 'ALL',
+    workloadPart: 'support',
+    name: 'งานควบคุมและป้องกันการติดเชื้อ (Infection Control - IC)',
+    category: 'ic',
+    frequencyType: 'weekly',
+    defaultFrequencyCount: 1,
+    unitTimeMinutes: 60,
+    unitLabel: 'สัปดาห์',
+    note: 'สุ่มตรวจความสะอาด คัดแยกขยะติดเชื้อ อุณหภูมิตู้เย็นยา สุ่มตรวจล้างมือ',
+    isActive: true,
+    isSystemDefault: true,
+  },
+  {
+    id: 'tpl-sup-cqi',
+    department: 'ALL',
+    workloadPart: 'support',
+    name: 'พัฒนาคุณภาพการพยาบาลและความเสี่ยง (CQI / HA / Risk Review)',
+    category: 'cqi_ha',
+    frequencyType: 'weekly',
+    defaultFrequencyCount: 1,
+    unitTimeMinutes: 90,
+    unitLabel: 'สัปดาห์',
+    note: 'ประชุมพัฒนาคุณภาพ ทบทวนเวชระเบียน ทบทวนอุบัติการณ์ Trigger Tool',
+    isActive: true,
+    isSystemDefault: true,
+  },
+  {
+    id: 'tpl-sup-stock',
+    department: 'ALL',
+    workloadPart: 'support',
+    name: 'ตรวจนับและเบิกจ่ายคลังเวชภัณฑ์ (Pharmacy Stock & Requisition)',
+    category: 'ward_management',
+    frequencyType: 'weekly',
+    defaultFrequencyCount: 1,
+    unitTimeMinutes: 60,
+    unitLabel: 'สัปดาห์',
+    note: 'ตรวจนับยาสำรอง ยาเสพติด เบิกสารน้ำและเวชภัณฑ์สิ้นเปลือง',
+    isActive: true,
+    isSystemDefault: true,
+  },
+  {
+    id: 'tpl-sup-cssd',
+    department: 'ALL',
+    workloadPart: 'support',
+    name: 'ส่งเครื่องมือและเบิกชุดอุปกรณ์ปลอดเชื้อ (CSSD Exchange)',
+    category: 'equipment_check',
+    frequencyType: 'daily',
+    defaultFrequencyCount: 1,
+    unitTimeMinutes: 20,
+    unitLabel: 'วัน',
+    note: 'นำส่งเครื่องมือล้างทำลายเชื้อ รับชุดเครื่องมือปราศจากเชื้อ',
+    isActive: true,
+    isSystemDefault: true,
+  },
+];
+
+/**
+ * Load activity templates from localStorage
+ */
+export function loadActivityTemplates(): ActivityTemplate[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY_TEMPLATES);
+    if (!raw) {
+      saveActivityTemplates(DEFAULT_ACTIVITY_TEMPLATES);
+      return DEFAULT_ACTIVITY_TEMPLATES;
+    }
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      return parsed;
+    }
+    return DEFAULT_ACTIVITY_TEMPLATES;
+  } catch (err) {
+    console.error('Failed to load activity templates', err);
+    return DEFAULT_ACTIVITY_TEMPLATES;
+  }
+}
+
+/**
+ * Save activity templates to localStorage
+ */
+export function saveActivityTemplates(templates: ActivityTemplate[]): void {
+  try {
+    localStorage.setItem(STORAGE_KEY_TEMPLATES, JSON.stringify(templates));
+  } catch (err) {
+    console.error('Failed to save activity templates', err);
+  }
+}
+
+/**
+ * Build initial indirect care items for a department using active templates
+ */
+export function buildDepartmentIndirectItems(dept: DepartmentKey, templates: ActivityTemplate[]): IndirectCareItem[] {
+  return templates
+    .filter((t) => t.isActive && t.workloadPart === 'indirect' && (t.department === 'ALL' || t.department === dept))
+    .map((t) => ({
+      id: t.id,
+      templateId: t.id,
+      name: t.name,
+      category: (t.category as any) || 'custom',
+      count: 0,
+      unitTimeMinutes: t.unitTimeMinutes,
+      unitLabel: t.unitLabel,
+      note: t.note,
+    }));
+}
+
+/**
+ * Build initial support work items for a department using active templates
+ */
+export function buildDepartmentSupportItems(dept: DepartmentKey, templates: ActivityTemplate[]): SupportWorkItem[] {
+  return templates
+    .filter((t) => t.isActive && t.workloadPart === 'support' && (t.department === 'ALL' || t.department === dept))
+    .map((t) => ({
+      id: t.id,
+      templateId: t.id,
+      name: t.name,
+      category: (t.category as any) || 'custom',
+      frequencyType: t.frequencyType || 'daily',
+      frequencyCount: t.defaultFrequencyCount || 0,
+      timeMinutesPerSession: t.unitTimeMinutes,
+      note: t.note,
+    }));
+}
+
+/**
+ * ผสานข้อมูลกิจกรรมในวันบันทึก (DailyRecord) เข้ากับแม่แบบส่วนกลาง (ActivityTemplates)
+ * เพื่อให้ทุกลำดับ/ประเภทที่เพิ่มในฐานข้อมูลเชื่อมโยง (Link) เข้ากับทุกวันที่บันทึกอย่างอัตโนมัติ
+ * โดยคงค่าตัวเลขจำนวนงานเดิมที่พยาบาลเคยบันทึกไว้ในวันนั้นๆ 100%
+ */
+export function mergeRecordWithActivityTemplates(
+  record: DailyRecord,
+  templates: ActivityTemplate[] = loadActivityTemplates()
+): DailyRecord {
+  const depts: DepartmentKey[] = ['ER', 'OPD', 'IPD1', 'IPD2', 'LR'];
+  const newRecord = { ...record };
+
+  depts.forEach((dept) => {
+    const deptKey = dept.toLowerCase() as 'er' | 'opd' | 'ipd1' | 'ipd2' | 'lr';
+    const deptData = { ...newRecord[deptKey] };
+
+    // 1. Indirect items (งานรอง)
+    const activeIndirectTemplates = templates.filter(
+      (t) => t.isActive && t.workloadPart === 'indirect' && (t.department === 'ALL' || t.department === dept)
+    );
+    const existingIndirect = deptData.indirectItems || [];
+    const mergedIndirect: IndirectCareItem[] = [];
+
+    activeIndirectTemplates.forEach((tpl) => {
+      const found = existingIndirect.find(
+        (item) => item.templateId === tpl.id || item.id === tpl.id || item.name === tpl.name
+      );
+      if (found) {
+        mergedIndirect.push({
+          ...found,
+          id: found.id || tpl.id,
+          templateId: tpl.id,
+          name: tpl.name,
+          category: (tpl.category as any) || found.category,
+          unitTimeMinutes: tpl.unitTimeMinutes,
+          unitLabel: tpl.unitLabel,
+          note: tpl.note !== undefined ? tpl.note : found.note,
+          count: found.count ?? 0,
+        });
+      } else {
+        mergedIndirect.push({
+          id: tpl.id,
+          templateId: tpl.id,
+          name: tpl.name,
+          category: (tpl.category as any) || 'custom',
+          unitTimeMinutes: tpl.unitTimeMinutes,
+          unitLabel: tpl.unitLabel,
+          note: tpl.note,
+          count: 0,
+        });
+      }
+    });
+
+    // รักษา custom items เดิมที่ผู้ใช้เคยเพิ่มไว้
+    existingIndirect.forEach((item) => {
+      if (!mergedIndirect.some((m) => m.id === item.id || m.templateId === item.id || m.name === item.name)) {
+        mergedIndirect.push(item);
+      }
+    });
+
+    deptData.indirectItems = mergedIndirect;
+
+    // 2. Support items (งานสนับสนุน)
+    const activeSupportTemplates = templates.filter(
+      (t) => t.isActive && t.workloadPart === 'support' && (t.department === 'ALL' || t.department === dept)
+    );
+    const existingSupport = deptData.supportItems || [];
+    const mergedSupport: SupportWorkItem[] = [];
+
+    activeSupportTemplates.forEach((tpl) => {
+      const found = existingSupport.find(
+        (item) => item.templateId === tpl.id || item.id === tpl.id || item.name === tpl.name
+      );
+      if (found) {
+        mergedSupport.push({
+          ...found,
+          id: found.id || tpl.id,
+          templateId: tpl.id,
+          name: tpl.name,
+          category: (tpl.category as any) || found.category,
+          timeMinutesPerSession: tpl.unitTimeMinutes,
+          frequencyType: tpl.frequencyType || found.frequencyType || 'daily',
+          note: tpl.note !== undefined ? tpl.note : found.note,
+          frequencyCount: found.frequencyCount ?? (tpl.defaultFrequencyCount || 0),
+        });
+      } else {
+        mergedSupport.push({
+          id: tpl.id,
+          templateId: tpl.id,
+          name: tpl.name,
+          category: (tpl.category as any) || 'custom',
+          timeMinutesPerSession: tpl.unitTimeMinutes,
+          frequencyType: tpl.frequencyType || 'daily',
+          note: tpl.note,
+          frequencyCount: tpl.defaultFrequencyCount || 0,
+        });
+      }
+    });
+
+    existingSupport.forEach((item) => {
+      if (!mergedSupport.some((m) => m.id === item.id || m.templateId === item.id || m.name === item.name)) {
+        mergedSupport.push(item);
+      }
+    });
+
+    deptData.supportItems = mergedSupport;
+    (newRecord as any)[deptKey] = deptData;
+  });
+
+  return newRecord;
+}
+
 // Create a clean blank new daily record with all counts set to 0 for real data entry
 export function createNewDailyRecord(dateStr: string, recorderName = ''): DailyRecord {
+  const templates = loadActivityTemplates();
   return {
     id: `sk-rec-${dateStr}`,
     date: dateStr,
@@ -40,8 +419,8 @@ export function createNewDailyRecord(dateStr: string, recorderName = ''): DailyR
       cprCount: 0,
       ambulanceReferral: 0,
       observationCases: 0,
-      indirectItems: createDefaultIndirectItems(0),
-      supportItems: createDefaultSupportItems(),
+      indirectItems: buildDepartmentIndirectItems('ER', templates),
+      supportItems: buildDepartmentSupportItems('ER', templates),
       actualStaff: { morning: 0, afternoon: 0, night: 0 },
     },
     opd: {
@@ -50,8 +429,8 @@ export function createNewDailyRecord(dateStr: string, recorderName = ''): DailyR
       minorSurgery: 0,
       specialClinic: 0,
       screeningPatients: 0,
-      indirectItems: createDefaultIndirectItems(0),
-      supportItems: createDefaultSupportItems(),
+      indirectItems: buildDepartmentIndirectItems('OPD', templates),
+      supportItems: buildDepartmentSupportItems('OPD', templates),
       actualStaff: { morning: 0, afternoon: 0, night: 0 },
     },
     ipd1: {
@@ -65,8 +444,8 @@ export function createNewDailyRecord(dateStr: string, recorderName = ''): DailyR
       pcs5_ventilator: 0,
       admissions: 0,
       discharges: 0,
-      indirectItems: createDefaultIndirectItems(0),
-      supportItems: createDefaultSupportItems(),
+      indirectItems: buildDepartmentIndirectItems('IPD1', templates),
+      supportItems: buildDepartmentSupportItems('IPD1', templates),
       actualStaff: { morning: 0, afternoon: 0, night: 0 },
     },
     ipd2: {
@@ -80,8 +459,8 @@ export function createNewDailyRecord(dateStr: string, recorderName = ''): DailyR
       pcs5_ventilator: 0,
       admissions: 0,
       discharges: 0,
-      indirectItems: createDefaultIndirectItems(0),
-      supportItems: createDefaultSupportItems(),
+      indirectItems: buildDepartmentIndirectItems('IPD2', templates),
+      supportItems: buildDepartmentSupportItems('IPD2', templates),
       actualStaff: { morning: 0, afternoon: 0, night: 0 },
     },
     lr: {
@@ -93,8 +472,8 @@ export function createNewDailyRecord(dateStr: string, recorderName = ''): DailyR
       highRiskCases: 0,
       newbornResuscitation: 0,
       referralCases: 0,
-      indirectItems: createDefaultIndirectItems(0),
-      supportItems: createDefaultSupportItems(),
+      indirectItems: buildDepartmentIndirectItems('LR', templates),
+      supportItems: buildDepartmentSupportItems('LR', templates),
       actualStaff: { morning: 0, afternoon: 0, night: 0 },
     },
     createdAt: new Date().toISOString(),
@@ -115,25 +494,77 @@ export function loadRecords(): DailyRecord[] {
         (r: DailyRecord) =>
           !r.notes?.includes('รพ.พหลฯ') && !r.notes?.includes('สถานการณ์เวรปกติ')
       );
-      return clean.map((r: DailyRecord) => {
-        if (!r.er.indirectItems) r.er.indirectItems = createDefaultIndirectItems(0);
-        if (!r.er.supportItems) r.er.supportItems = createDefaultSupportItems();
-        if (!r.opd.indirectItems) r.opd.indirectItems = createDefaultIndirectItems(0);
-        if (!r.opd.supportItems) r.opd.supportItems = createDefaultSupportItems();
-        if (!r.ipd1.indirectItems) r.ipd1.indirectItems = createDefaultIndirectItems(0);
-        if (!r.ipd1.supportItems) r.ipd1.supportItems = createDefaultSupportItems();
-        if (!r.ipd2.indirectItems) r.ipd2.indirectItems = createDefaultIndirectItems(0);
-        if (!r.ipd2.supportItems) r.ipd2.supportItems = createDefaultSupportItems();
-        if (!r.lr.indirectItems) r.lr.indirectItems = createDefaultIndirectItems(0);
-        if (!r.lr.supportItems) r.lr.supportItems = createDefaultSupportItems();
-        return r;
-      });
+      const templates = loadActivityTemplates();
+      return clean.map((r: DailyRecord) => mergeRecordWithActivityTemplates(r, templates));
     }
     return [];
   } catch (err) {
     console.error('Failed to load records from storage', err);
     return [];
   }
+}
+
+/**
+ * เพิ่มหรือแก้ไขประเภทกิจกรรมแม่แบบ และเชื่อมโยง (Link) เข้าสู่ทุกวันที่บันทึกไว้ในระบบทันที
+ */
+export function addOrUpdateActivityTemplateAndLink(
+  template: ActivityTemplate,
+  linkAllDates = true
+): { templates: ActivityTemplate[]; updatedRecords: DailyRecord[] } {
+  const currentTemplates = loadActivityTemplates();
+  const existingIdx = currentTemplates.findIndex((t) => t.id === template.id);
+
+  let updatedTemplates: ActivityTemplate[];
+  if (existingIdx >= 0) {
+    updatedTemplates = [...currentTemplates];
+    updatedTemplates[existingIdx] = { ...template, updatedAt: new Date().toISOString() };
+  } else {
+    updatedTemplates = [...currentTemplates, { ...template, createdAt: new Date().toISOString() }];
+  }
+
+  saveActivityTemplates(updatedTemplates);
+
+  let updatedRecords: DailyRecord[] = [];
+  if (linkAllDates) {
+    const records = loadRecords();
+    updatedRecords = records.map((r) => mergeRecordWithActivityTemplates(r, updatedTemplates));
+    saveRecords(updatedRecords);
+  }
+
+  return { templates: updatedTemplates, updatedRecords };
+}
+
+/**
+ * ลบประเภทกิจกรรมแม่แบบ และเชื่อมโยงลบออกจากทุกวันที่บันทึกไว้ในระบบ
+ */
+export function deleteActivityTemplateAndLink(
+  templateId: string,
+  removeFromDates = true
+): { templates: ActivityTemplate[]; updatedRecords: DailyRecord[] } {
+  const currentTemplates = loadActivityTemplates();
+  const updatedTemplates = currentTemplates.filter((t) => t.id !== templateId);
+  saveActivityTemplates(updatedTemplates);
+
+  let updatedRecords: DailyRecord[] = [];
+  if (removeFromDates) {
+    const records = loadRecords();
+    updatedRecords = records.map((r) => {
+      const newRec = { ...r };
+      const depts: ('er' | 'opd' | 'ipd1' | 'ipd2' | 'lr')[] = ['er', 'opd', 'ipd1', 'ipd2', 'lr'];
+      depts.forEach((d) => {
+        newRec[d].indirectItems = (newRec[d].indirectItems || []).filter(
+          (item) => item.templateId !== templateId && item.id !== templateId
+        );
+        newRec[d].supportItems = (newRec[d].supportItems || []).filter(
+          (item) => item.templateId !== templateId && item.id !== templateId
+        );
+      });
+      return newRec;
+    });
+    saveRecords(updatedRecords);
+  }
+
+  return { templates: updatedTemplates, updatedRecords };
 }
 
 export function clearAllRecords(): void {

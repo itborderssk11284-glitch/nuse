@@ -4,7 +4,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { DailyRecord, DepartmentKey, StandardWeightsConfig } from './types/nursing';
+import { DailyRecord, DepartmentKey, StandardWeightsConfig, ActivityTemplate } from './types/nursing';
 import {
   formatDateISO,
   getThemePreference,
@@ -19,6 +19,11 @@ import {
   FontScale,
   getFontScalePreference,
   saveFontScalePreference,
+  loadActivityTemplates,
+  saveActivityTemplates,
+  addOrUpdateActivityTemplateAndLink,
+  deleteActivityTemplateAndLink,
+  mergeRecordWithActivityTemplates,
 } from './utils/storage';
 import { exportToExcel } from './utils/exportUtils';
 import { TopNavbar, ActiveTab } from './components/TopNavbar';
@@ -40,6 +45,8 @@ import {
   fetchStandardsFromSupabase,
   saveStandardsToSupabase,
   fetchUsersFromSupabase,
+  fetchActivityTemplatesFromSupabase,
+  saveActivityTemplatesToSupabase,
 } from './utils/supabase';
 import {
   MapPin,
@@ -83,6 +90,7 @@ export default function App() {
   // Data records & standards config (Local Storage)
   const [records, setRecords] = useState<DailyRecord[]>(() => loadRecords());
   const [standardsConfig, setStandardsConfig] = useState<StandardWeightsConfig>(() => loadStandards());
+  const [activityTemplates, setActivityTemplates] = useState<ActivityTemplate[]>(() => loadActivityTemplates());
 
   // Current selected date
   const [selectedDate, setSelectedDate] = useState<string>(() => {
@@ -180,6 +188,21 @@ export default function App() {
       fetchUsersFromSupabase().then((remoteUsers) => {
         if (remoteUsers.length > 0) {
           saveAllUsers(remoteUsers);
+        }
+      });
+      // Fetch Activity Templates from Supabase (ส่วนที่ 2: งานรอง และ ส่วนที่ 3: งานสนับสนุน)
+      fetchActivityTemplatesFromSupabase().then((remoteTemplates) => {
+        if (remoteTemplates && remoteTemplates.length > 0) {
+          setActivityTemplates(remoteTemplates);
+          saveActivityTemplates(remoteTemplates);
+          setRecords((prev) => {
+            const merged = prev.map((r) => mergeRecordWithActivityTemplates(r, remoteTemplates));
+            saveRecords(merged);
+            return merged;
+          });
+        } else if (isSupabaseConfigured()) {
+          const currentTpls = loadActivityTemplates();
+          saveActivityTemplatesToSupabase(currentTpls);
         }
       });
     }
@@ -295,6 +318,68 @@ export default function App() {
     setTimeout(() => setToastMessage(null), 3500);
   };
 
+  // Master Activity Templates (ส่วนที่ 2: งานรอง และ ส่วนที่ 3: งานสนับสนุน)
+  const handleSaveActivityTemplate = async (template: ActivityTemplate, linkAllDates = true) => {
+    const { templates: updatedTemplates, updatedRecords } = addOrUpdateActivityTemplateAndLink(template, linkAllDates);
+    setActivityTemplates(updatedTemplates);
+    if (linkAllDates && updatedRecords.length > 0) {
+      setRecords(updatedRecords);
+      saveRecords(updatedRecords);
+    }
+    if (isSupabaseConfigured()) {
+      await saveActivityTemplatesToSupabase(updatedTemplates);
+      if (linkAllDates && updatedRecords.length > 0) {
+        // Asynchronously update daily records in Supabase
+        for (const rec of updatedRecords) {
+          saveRecordToSupabase(rec);
+        }
+      }
+    }
+    setToastMessage(`บันทึกประเภท "${template.name}" ไปยังฐานข้อมูลและเชื่อมโยงกับทุกวันที่บันทึก (${updatedRecords.length} วัน) สำเร็จ!`);
+    setTimeout(() => setToastMessage(null), 3500);
+  };
+
+  const handleDeleteActivityTemplate = async (templateId: string, removeFromAllDates = true) => {
+    const { templates: updatedTemplates, updatedRecords } = deleteActivityTemplateAndLink(templateId, removeFromAllDates);
+    setActivityTemplates(updatedTemplates);
+    if (removeFromAllDates && updatedRecords.length > 0) {
+      setRecords(updatedRecords);
+      saveRecords(updatedRecords);
+    }
+    if (isSupabaseConfigured()) {
+      await saveActivityTemplatesToSupabase(updatedTemplates);
+      if (removeFromAllDates && updatedRecords.length > 0) {
+        for (const rec of updatedRecords) {
+          saveRecordToSupabase(rec);
+        }
+      }
+    }
+    setToastMessage('ลบประเภทงานออกจากฐานข้อมูลและทุกวันที่บันทึกเรียบร้อย');
+    setTimeout(() => setToastMessage(null), 3500);
+  };
+
+  const handleSyncAllDatesWithTemplates = async () => {
+    let tpls = activityTemplates;
+    if (isSupabaseConfigured()) {
+      const remote = await fetchActivityTemplatesFromSupabase();
+      if (remote && remote.length > 0) {
+        tpls = remote;
+        setActivityTemplates(remote);
+        saveActivityTemplates(remote);
+      }
+    }
+    const merged = records.map((r) => mergeRecordWithActivityTemplates(r, tpls));
+    setRecords(merged);
+    saveRecords(merged);
+    if (isSupabaseConfigured()) {
+      for (const rec of merged) {
+        saveRecordToSupabase(rec);
+      }
+    }
+    setToastMessage(`เชื่อมโยงประเภทงานจากฐานข้อมูลกับทุกวันที่บันทึก (${merged.length} วัน) สำเร็จ`);
+    setTimeout(() => setToastMessage(null), 3500);
+  };
+
   // Navigation handlers
   const handleNavigateToEntry = (dept?: string) => {
     if (dept && (dept === 'ER' || dept === 'OPD' || dept === 'IPD1' || dept === 'IPD2' || dept === 'LR')) {
@@ -369,8 +454,12 @@ export default function App() {
               onAddNewDateRecord={handleAddNewDateRecord}
               standardsConfig={standardsConfig}
               initialDept={targetDept}
-              onOpenStandards={() => setIsStandardsModalOpen(true)}
+              onOpenStandards={() => setIsSettingsOpen(true)}
               appUser={appUser}
+              activityTemplates={activityTemplates}
+              onSaveActivityTemplate={handleSaveActivityTemplate}
+              onDeleteActivityTemplate={handleDeleteActivityTemplate}
+              onSyncAllDatesWithTemplates={handleSyncAllDatesWithTemplates}
             />
           )}
 
@@ -437,6 +526,10 @@ export default function App() {
         onSaveStandards={handleSaveStandards}
         onResetStandards={handleResetStandards}
         onClearAllRecords={handleClearAllRecords}
+        activityTemplates={activityTemplates}
+        onSaveActivityTemplate={handleSaveActivityTemplate}
+        onDeleteActivityTemplate={handleDeleteActivityTemplate}
+        onSyncAllDatesWithTemplates={handleSyncAllDatesWithTemplates}
       />
 
       <CalculationReferenceModal

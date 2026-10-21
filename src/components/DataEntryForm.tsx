@@ -10,6 +10,7 @@ import {
   ShiftStaff,
   StandardWeightsConfig,
   SupportWorkItem,
+  ActivityTemplate,
 } from '../types/nursing';
 import {
   calculateER,
@@ -46,9 +47,64 @@ import {
   ShieldCheck,
   ShieldAlert,
   Star,
+  Database,
+  Cloud,
+  Link2,
+  RotateCw,
+  ListFilter,
+  Tag,
+  Info,
+  ExternalLink,
+  Search,
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { AppUser, canUserEditDepartment, canUserAddRecord, ROLE_LABELS, DEPARTMENT_LABELS } from '../types/auth';
+
+export const INDIRECT_CATEGORY_LABELS: Record<string, { label: string; badgeColor: string }> = {
+  documentation: {
+    label: 'เวชระเบียน / บันทึกชาร์จ',
+    badgeColor: 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300 border border-blue-200 dark:border-blue-800',
+  },
+  medication: {
+    label: 'เตรียมยา / สารน้ำ',
+    badgeColor: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800',
+  },
+  coordination: {
+    label: 'ประสานงาน / ส่งต่อ',
+    badgeColor: 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300 border border-amber-200 dark:border-amber-800',
+  },
+  handover: {
+    label: 'ส่งมอบเวรข้ามกะ',
+    badgeColor: 'bg-purple-100 text-purple-800 dark:bg-purple-950 dark:text-purple-300 border border-purple-200 dark:border-purple-800',
+  },
+  custom: {
+    label: 'งานรองเฉพาะด้าน',
+    badgeColor: 'bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-300 border border-slate-200 dark:border-slate-700',
+  },
+};
+
+export const SUPPORT_CATEGORY_LABELS: Record<string, { label: string; badgeColor: string }> = {
+  ward_management: {
+    label: 'บริหารวอร์ด / ตรวจเวร',
+    badgeColor: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800',
+  },
+  equipment_check: {
+    label: 'ตรวจเครื่องมือ / รถช่วยชีวิต',
+    badgeColor: 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300 border border-rose-200 dark:border-rose-800',
+  },
+  ic: {
+    label: 'ป้องกันการติดเชื้อ (IC)',
+    badgeColor: 'bg-teal-100 text-teal-800 dark:bg-teal-950 dark:text-teal-300 border border-teal-200 dark:border-teal-800',
+  },
+  cqi_ha: {
+    label: 'พัฒนาคุณภาพ (CQI / HA)',
+    badgeColor: 'bg-violet-100 text-violet-800 dark:bg-violet-950 dark:text-violet-300 border border-violet-200 dark:border-violet-800',
+  },
+  custom: {
+    label: 'งานสนับสนุนทั่วไป',
+    badgeColor: 'bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-300 border border-slate-200 dark:border-slate-700',
+  },
+};
 
 interface DataEntryFormProps {
   currentRecord: DailyRecord;
@@ -58,6 +114,10 @@ interface DataEntryFormProps {
   initialDept?: DepartmentKey;
   onOpenStandards: () => void;
   appUser?: AppUser | null;
+  activityTemplates?: ActivityTemplate[];
+  onSaveActivityTemplate?: (template: ActivityTemplate, linkAllDates?: boolean) => Promise<void>;
+  onDeleteActivityTemplate?: (templateId: string, removeFromAllDates?: boolean) => Promise<void>;
+  onSyncAllDatesWithTemplates?: () => Promise<void>;
 }
 
 export const DataEntryForm: React.FC<DataEntryFormProps> = ({
@@ -68,6 +128,10 @@ export const DataEntryForm: React.FC<DataEntryFormProps> = ({
   initialDept = 'ER',
   onOpenStandards,
   appUser = null,
+  activityTemplates = [],
+  onSaveActivityTemplate,
+  onDeleteActivityTemplate,
+  onSyncAllDatesWithTemplates,
 }) => {
   // If user is department head, default initial department to their own department
   const defaultDept = React.useMemo<DepartmentKey>(() => {
@@ -89,42 +153,60 @@ export const DataEntryForm: React.FC<DataEntryFormProps> = ({
   const [isNewDateModalOpen, setIsNewDateModalOpen] = useState(false);
   const [newDateInput, setNewDateInput] = useState(() => new Date().toISOString().slice(0, 10));
 
-  // Edit / Add Item Modal for Indirect Care (งานรอง)
-  const [editingIndirectItem, setEditingIndirectItem] = useState<{
+  // Master Activity Catalog Modal
+  const [isCatalogModalOpen, setIsCatalogModalOpen] = useState(false);
+  const [catalogSearchTerm, setCatalogSearchTerm] = useState('');
+  const [catalogPartFilter, setCatalogPartFilter] = useState<'all' | 'indirect' | 'support'>('all');
+  const [catalogDeptFilter, setCatalogDeptFilter] = useState<'all' | DepartmentKey | 'ALL'>('all');
+
+  // Unified Add / Edit Activity Type Modal (พร้อมบันทึกลงฐานข้อมูล Supabase และเชื่อมโยงทุกวัน)
+  const [activityItemModal, setActivityItemModal] = useState<{
     isOpen: boolean;
     isNew: boolean;
-    item: IndirectCareItem;
+    part: 'indirect' | 'support';
+    id: string;
+    templateId?: string;
+    name: string;
+    category: string;
+    departmentScope: 'ALL' | DepartmentKey;
+    unitTimeMinutes: number;
+    unitLabel: string;
+    frequencyType: 'daily' | 'weekly' | 'monthly' | 'custom';
+    frequencyCount: number;
+    note: string;
+    linkToDatabase: boolean;
+    todayCount: number;
   }>({
     isOpen: false,
-    isNew: false,
-    item: {
-      id: '',
-      name: '',
-      category: 'custom',
-      count: 1,
-      unitTimeMinutes: 10,
-      unitLabel: 'ครั้ง',
-      note: '',
-    },
+    isNew: true,
+    part: 'indirect',
+    id: '',
+    name: '',
+    category: 'documentation',
+    departmentScope: 'ALL',
+    unitTimeMinutes: 10,
+    unitLabel: 'ราย',
+    frequencyType: 'daily',
+    frequencyCount: 1,
+    note: '',
+    linkToDatabase: true,
+    todayCount: 0,
   });
 
-  // Edit / Add Item Modal for Support Work (งานสนับสนุน)
-  const [editingSupportItem, setEditingSupportItem] = useState<{
+  // Delete Confirmation Dialog state
+  const [deleteDialog, setDeleteDialog] = useState<{
     isOpen: boolean;
-    isNew: boolean;
-    item: SupportWorkItem;
+    part: 'indirect' | 'support';
+    id: string;
+    templateId?: string;
+    name: string;
+    isLinked: boolean;
   }>({
     isOpen: false,
-    isNew: false,
-    item: {
-      id: '',
-      name: '',
-      category: 'custom',
-      frequencyType: 'weekly',
-      frequencyCount: 1,
-      timeMinutesPerSession: 60,
-      note: '',
-    },
+    part: 'indirect',
+    id: '',
+    name: '',
+    isLinked: false,
   });
 
   React.useEffect(() => {
@@ -230,92 +312,178 @@ export const DataEntryForm: React.FC<DataEntryFormProps> = ({
     }));
   };
 
-  // --- CRUD for Indirect Care Items (งานรอง) ---
-  const handleOpenAddIndirect = () => {
-    setEditingIndirectItem({
+  // --- CRUD for Indirect Care & Support Work Items (เชื่อมโยงฐานข้อมูลส่วนกลาง) ---
+  const handleOpenAddModal = (part: 'indirect' | 'support') => {
+    setActivityItemModal({
       isOpen: true,
       isNew: true,
-      item: {
-        id: `ind-custom-${Date.now()}`,
-        name: '',
-        category: 'custom',
-        count: 10,
-        unitTimeMinutes: 10,
-        unitLabel: 'ราย',
-        note: '',
-      },
+      part,
+      id: `${part === 'indirect' ? 'ind' : 'sup'}-${Date.now()}`,
+      templateId: undefined,
+      name: '',
+      category: part === 'indirect' ? 'documentation' : 'ward_management',
+      departmentScope: 'ALL',
+      unitTimeMinutes: part === 'indirect' ? 10 : 30,
+      unitLabel: part === 'indirect' ? 'ราย' : 'วัน',
+      frequencyType: 'daily',
+      frequencyCount: 1,
+      note: '',
+      linkToDatabase: true,
+      todayCount: 0,
     });
   };
 
   const handleOpenEditIndirect = (item: IndirectCareItem) => {
-    setEditingIndirectItem({
+    setActivityItemModal({
       isOpen: true,
       isNew: false,
-      item: { ...item },
-    });
-  };
-
-  const handleSaveIndirectItem = () => {
-    const currentList = currentDeptData.indirectItems || [];
-    let updated: IndirectCareItem[];
-    if (editingIndirectItem.isNew) {
-      updated = [...currentList, editingIndirectItem.item];
-    } else {
-      updated = currentList.map((i) => (i.id === editingIndirectItem.item.id ? editingIndirectItem.item : i));
-    }
-    setIndirectItemsForActiveDept(updated);
-    setEditingIndirectItem({ ...editingIndirectItem, isOpen: false });
-  };
-
-  const handleDeleteIndirectItem = (id: string) => {
-    if (confirm('คุณต้องการลบรายการงานรองนี้ใช่หรือไม่?')) {
-      const currentList = currentDeptData.indirectItems || [];
-      setIndirectItemsForActiveDept(currentList.filter((i) => i.id !== id));
-    }
-  };
-
-  // --- CRUD for Support Work Items (งานสนับสนุน) ---
-  const handleOpenAddSupport = () => {
-    setEditingSupportItem({
-      isOpen: true,
-      isNew: true,
-      item: {
-        id: `sup-custom-${Date.now()}`,
-        name: '',
-        category: 'custom',
-        frequencyType: 'weekly',
-        frequencyCount: 1,
-        timeMinutesPerSession: 60,
-        note: '',
-      },
+      part: 'indirect',
+      id: item.id,
+      templateId: item.templateId,
+      name: item.name,
+      category: item.category || 'documentation',
+      departmentScope: 'ALL',
+      unitTimeMinutes: item.unitTimeMinutes,
+      unitLabel: item.unitLabel || 'ราย',
+      frequencyType: 'daily',
+      frequencyCount: 1,
+      note: item.note || '',
+      linkToDatabase: !!item.templateId || true,
+      todayCount: item.count,
     });
   };
 
   const handleOpenEditSupport = (item: SupportWorkItem) => {
-    setEditingSupportItem({
+    setActivityItemModal({
       isOpen: true,
       isNew: false,
-      item: { ...item },
+      part: 'support',
+      id: item.id,
+      templateId: item.templateId,
+      name: item.name,
+      category: item.category || 'ward_management',
+      departmentScope: 'ALL',
+      unitTimeMinutes: item.timeMinutesPerSession,
+      unitLabel: 'วัน',
+      frequencyType: item.frequencyType || 'daily',
+      frequencyCount: item.frequencyCount || 1,
+      note: item.note || '',
+      linkToDatabase: !!item.templateId || true,
+      todayCount: item.frequencyCount || 1,
     });
   };
 
-  const handleSaveSupportItem = () => {
-    const currentList = currentDeptData.supportItems || [];
-    let updated: SupportWorkItem[];
-    if (editingSupportItem.isNew) {
-      updated = [...currentList, editingSupportItem.item];
+  const handleSaveActivityModal = async () => {
+    const modal = activityItemModal;
+    if (!modal.name.trim()) return;
+
+    if (modal.part === 'indirect') {
+      const templateId = modal.templateId || (modal.linkToDatabase ? `tpl-ind-${Date.now()}` : undefined);
+      const newItem: IndirectCareItem = {
+        id: modal.id || templateId || `ind-${Date.now()}`,
+        templateId,
+        name: modal.name.trim(),
+        category: (modal.category as any) || 'custom',
+        count: modal.todayCount ?? 0,
+        unitTimeMinutes: Number(modal.unitTimeMinutes) || 1,
+        unitLabel: modal.unitLabel || 'ราย',
+        note: modal.note.trim(),
+      };
+
+      const currentList = currentDeptData.indirectItems || [];
+      let updatedList: IndirectCareItem[];
+      if (modal.isNew) {
+        updatedList = [...currentList, newItem];
+      } else {
+        updatedList = currentList.map((i) => (i.id === modal.id ? { ...newItem, count: i.count } : i));
+      }
+      setIndirectItemsForActiveDept(updatedList);
+
+      if (modal.linkToDatabase && onSaveActivityTemplate && templateId) {
+        const template: ActivityTemplate = {
+          id: templateId,
+          department: modal.departmentScope,
+          workloadPart: 'indirect',
+          name: modal.name.trim(),
+          category: modal.category,
+          unitTimeMinutes: Number(modal.unitTimeMinutes) || 1,
+          unitLabel: modal.unitLabel || 'ราย',
+          note: modal.note.trim(),
+          isActive: true,
+        };
+        await onSaveActivityTemplate(template, true);
+      }
     } else {
-      updated = currentList.map((i) => (i.id === editingSupportItem.item.id ? editingSupportItem.item : i));
+      const templateId = modal.templateId || (modal.linkToDatabase ? `tpl-sup-${Date.now()}` : undefined);
+      const newItem: SupportWorkItem = {
+        id: modal.id || templateId || `sup-${Date.now()}`,
+        templateId,
+        name: modal.name.trim(),
+        category: (modal.category as any) || 'custom',
+        frequencyType: modal.frequencyType,
+        frequencyCount: Number(modal.frequencyCount) || 1,
+        timeMinutesPerSession: Number(modal.unitTimeMinutes) || 1,
+        note: modal.note.trim(),
+      };
+
+      const currentList = currentDeptData.supportItems || [];
+      let updatedList: SupportWorkItem[];
+      if (modal.isNew) {
+        updatedList = [...currentList, newItem];
+      } else {
+        updatedList = currentList.map((i) => (i.id === modal.id ? { ...newItem, frequencyCount: i.frequencyCount } : i));
+      }
+      setSupportItemsForActiveDept(updatedList);
+
+      if (modal.linkToDatabase && onSaveActivityTemplate && templateId) {
+        const template: ActivityTemplate = {
+          id: templateId,
+          department: modal.departmentScope,
+          workloadPart: 'support',
+          name: modal.name.trim(),
+          category: modal.category,
+          unitTimeMinutes: Number(modal.unitTimeMinutes) || 1,
+          unitLabel: 'วัน',
+          frequencyType: modal.frequencyType,
+          defaultFrequencyCount: Number(modal.frequencyCount) || 1,
+          note: modal.note.trim(),
+          isActive: true,
+        };
+        await onSaveActivityTemplate(template, true);
+      }
     }
-    setSupportItemsForActiveDept(updated);
-    setEditingSupportItem({ ...editingSupportItem, isOpen: false });
+
+    setActivityItemModal((prev) => ({ ...prev, isOpen: false }));
   };
 
-  const handleDeleteSupportItem = (id: string) => {
-    if (confirm('คุณต้องการลบรายการงานสนับสนุนนี้ใช่หรือไม่?')) {
+  const handleRequestDelete = (part: 'indirect' | 'support', item: IndirectCareItem | SupportWorkItem) => {
+    const isLinked = !!item.templateId || activityTemplates.some((t) => t.id === item.id || t.id === item.templateId);
+    setDeleteDialog({
+      isOpen: true,
+      part,
+      id: item.id,
+      templateId: item.templateId,
+      name: item.name,
+      isLinked,
+    });
+  };
+
+  const handleConfirmDelete = async (deleteFromDatabase: boolean) => {
+    const { part, id, templateId } = deleteDialog;
+    if (part === 'indirect') {
+      const currentList = currentDeptData.indirectItems || [];
+      setIndirectItemsForActiveDept(currentList.filter((i) => i.id !== id && i.templateId !== id));
+      if (deleteFromDatabase && (templateId || id) && onDeleteActivityTemplate) {
+        await onDeleteActivityTemplate(templateId || id, true);
+      }
+    } else {
       const currentList = currentDeptData.supportItems || [];
-      setSupportItemsForActiveDept(currentList.filter((i) => i.id !== id));
+      setSupportItemsForActiveDept(currentList.filter((i) => i.id !== id && i.templateId !== id));
+      if (deleteFromDatabase && (templateId || id) && onDeleteActivityTemplate) {
+        await onDeleteActivityTemplate(templateId || id, true);
+      }
     }
+    setDeleteDialog((prev) => ({ ...prev, isOpen: false }));
   };
 
   // Live calculation for currently active department
@@ -857,237 +1025,475 @@ export const DataEntryForm: React.FC<DataEntryFormProps> = ({
               )}
             </div>
 
-            {/* ========================================== */}
-            {/* ส่วนที่ 2: งานรอง (Indirect Care) */}
-            {/* สูตร: ∑ (ปริมาณงาน x เวลามาตรฐานต่อหน่วย) */}
-            {/* ========================================== */}
-            <div className="space-y-3 pt-3 border-t border-slate-100 dark:border-slate-800">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-blue-50/70 dark:bg-blue-950/40 p-3 rounded-xl border border-blue-200/50 dark:border-blue-800/50">
+            {/* ======================================================== */}
+            {/* ส่วนที่ 2: ตารางบันทึกงานรอง (Indirect Nursing Care Table) */}
+            {/* สูตร: ∑ (ปริมาณงาน x เวลามาตรฐานต่อหน่วย) ÷ 60           */}
+            {/* ======================================================== */}
+            <div className="space-y-3 pt-4 border-t border-slate-100 dark:border-slate-800">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-gradient-to-r from-blue-50/90 via-sky-50/70 to-blue-50/90 dark:from-blue-950/40 dark:via-sky-950/30 dark:to-blue-950/40 p-3.5 rounded-2xl border border-blue-200/70 dark:border-blue-800/60 shadow-2xs">
                 <div>
                   <div className="flex items-center gap-2">
-                    <span className="w-2.5 h-2.5 rounded-full bg-blue-500" />
-                    <span className="font-bold text-xs text-blue-950 dark:text-blue-200">
-                      ส่วนที่ 2: งานรอง (Indirect Nursing Care)
+                    <span className="w-2.5 h-2.5 rounded-full bg-blue-600 animate-pulse" />
+                    <span className="font-bold text-xs sm:text-sm text-blue-950 dark:text-blue-100 flex items-center gap-1.5">
+                      <span>ส่วนที่ 2: งานรอง (Indirect Nursing Care)</span>
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/60 text-blue-800 dark:text-blue-300 font-semibold border border-blue-200 dark:border-blue-700/60">
+                        {currentDeptData.indirectItems?.length || 0} ประเภท
+                      </span>
                     </span>
                   </div>
-                  <p className="text-[10px] text-blue-700/80 dark:text-blue-400/80 mt-0.5">
-                    สูตร: ∑ (ปริมาณงาน × เวลามาตรฐานต่อหน่วย) • เช่น บันทึกชาร์จ, เตรียมยา, ประสานงาน, ส่งเวร
+                  <p className="text-[11px] text-blue-800/80 dark:text-blue-300/80 mt-1 leading-snug">
+                    <strong>สูตร:</strong> ∑ (ปริมาณงานจริง × เวลามาตรฐานต่อหน่วย) ÷ 60 นาที • เช่น บันทึกชาร์จ, เตรียมยา, ประสานงาน, ส่งเวร
                   </p>
                 </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-mono font-bold text-blue-800 dark:text-blue-300">
-                    รวม: {activeCalc.indirectCareHours} ชม./วัน
-                  </span>
+
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <div className="px-3 py-1.5 rounded-xl bg-white/80 dark:bg-slate-900/80 border border-blue-200 dark:border-blue-800 flex items-center gap-1.5 shadow-2xs">
+                    <span className="text-[11px] text-slate-500 dark:text-slate-400">ค่างานรองรวม:</span>
+                    <span className="font-mono font-black text-sm text-blue-700 dark:text-blue-300">
+                      {activeCalc.indirectCareHours}
+                    </span>
+                    <span className="text-[11px] text-slate-500">ชม./วัน</span>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => setIsCatalogModalOpen(true)}
+                    className="px-2.5 py-1.5 rounded-xl bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 text-xs font-semibold flex items-center gap-1.5 shadow-2xs transition-all cursor-pointer"
+                    title="เปิดคลังประเภทงานที่บันทึกในฐานข้อมูล"
+                  >
+                    <Database className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+                    <span>คลังประเภทงาน ({activityTemplates?.length || 0})</span>
+                  </button>
+
                   {canEditActiveDept && (
                     <button
                       type="button"
-                      onClick={handleOpenAddIndirect}
-                      className="px-2.5 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-[11px] font-bold flex items-center gap-1 shadow-xs cursor-pointer"
+                      onClick={() => handleOpenAddModal('indirect')}
+                      className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-sm hover:shadow-md transition-all active:scale-95 cursor-pointer"
                     >
-                      <Plus className="w-3.5 h-3.5" />
+                      <Plus className="w-4 h-4" />
                       <span>เพิ่มประเภทงานรอง</span>
                     </button>
                   )}
                 </div>
               </div>
 
-              {/* Indirect Care Items List */}
-              <div className="space-y-2">
-                {(currentDeptData.indirectItems || []).map((item) => {
-                  const itemHours = Number(((item.count * item.unitTimeMinutes) / 60).toFixed(2));
-                  return (
-                    <div
-                      key={item.id}
-                      className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/70 dark:border-slate-700/70 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs hover:border-blue-300 dark:hover:border-blue-700 transition-colors"
-                    >
-                      <div className="space-y-0.5 flex-1">
-                        <div className="flex items-center gap-2">
-                          <span className="font-bold text-slate-800 dark:text-slate-200">
-                            {item.name}
-                          </span>
-                          <span className="text-[10px] px-1.5 py-0.2 rounded bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300">
-                            {item.unitTimeMinutes} นาที/{item.unitLabel || 'หน่วย'}
-                          </span>
-                        </div>
-                        {item.note && (
-                          <div className="text-[11px] text-slate-400">{item.note}</div>
-                        )}
-                      </div>
-
-                      {/* Inputs & Controls */}
-                      <div className="flex items-center gap-3 shrink-0">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-slate-400 text-[11px]">ปริมาณ:</span>
-                          <input
-                            type="number"
-                            min="0"
-                            value={item.count}
-                            onChange={(e) => {
-                              const val = Math.max(0, parseInt(e.target.value) || 0);
-                              const updated = (currentDeptData.indirectItems || []).map((i) =>
-                                i.id === item.id ? { ...i, count: val } : i
-                              );
-                              setIndirectItemsForActiveDept(updated);
-                            }}
-                            className="w-16 py-1 px-2 text-center font-mono font-bold text-xs bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white"
-                          />
-                          <span className="text-slate-400 text-[11px]">{item.unitLabel || 'หน่วย'}</span>
-                        </div>
-
-                        <div className="text-right min-w-[70px]">
-                          <span className="font-mono font-bold text-blue-600 dark:text-blue-400 text-xs">
-                            {itemHours} ชม.
-                          </span>
-                        </div>
-
-                        {/* Edit & Delete Buttons */}
-                        {canEditActiveDept && (
-                          <div className="flex items-center gap-1 pl-2 border-l border-slate-200 dark:border-slate-700">
+              {/* ตารางบันทึกส่วนที่ 2: งานรอง */}
+              <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xs">
+                <table className="w-full text-left border-collapse text-xs min-w-[700px]">
+                  <thead>
+                    <tr className="bg-slate-50/90 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-700 text-[11px] font-bold text-slate-600 dark:text-slate-300 uppercase tracking-wider">
+                      <th className="py-2.5 px-3 w-10 text-center">#</th>
+                      <th className="py-2.5 px-3">ประเภทกิจกรรมงานรอง</th>
+                      <th className="py-2.5 px-3 text-center w-36">หมวดหมู่</th>
+                      <th className="py-2.5 px-3 text-center w-32">เวลามาตรฐาน</th>
+                      <th className="py-2.5 px-3 text-center w-48">ปริมาณงานจริงในเวร</th>
+                      <th className="py-2.5 px-3 text-right w-28">ค่างาน (ชม.)</th>
+                      <th className="py-2.5 px-3 text-center w-32">ฐานข้อมูล</th>
+                      {canEditActiveDept && <th className="py-2.5 px-3 text-center w-20">จัดการ</th>}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {(currentDeptData.indirectItems || []).length === 0 ? (
+                      <tr>
+                        <td colSpan={canEditActiveDept ? 8 : 7} className="py-8 text-center text-slate-400">
+                          <p className="font-medium text-xs">ยังไม่มีรายการงานรองในฝ่ายงานนี้</p>
+                          {canEditActiveDept && (
                             <button
                               type="button"
-                              onClick={() => handleOpenEditIndirect(item)}
-                              title="แก้ไขประเภทงานรองนี้"
-                              className="p-1 rounded text-slate-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950 cursor-pointer"
+                              onClick={() => handleOpenAddModal('indirect')}
+                              className="mt-2 text-blue-600 hover:underline text-xs font-semibold inline-flex items-center gap-1 cursor-pointer"
                             >
-                              <Edit2 className="w-3.5 h-3.5" />
+                              <Plus className="w-3.5 h-3.5" /> เพิ่มประเภทงานรองแรก
                             </button>
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteIndirectItem(item.id)}
-                              title="ลบประเภทงานรองนี้"
-                              className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950 cursor-pointer"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
+                          )}
+                        </td>
+                      </tr>
+                    ) : (
+                      (currentDeptData.indirectItems || []).map((item, idx) => {
+                        const itemHours = Number(((item.count * item.unitTimeMinutes) / 60).toFixed(2));
+                        const isLinked = !!item.templateId || activityTemplates.some((t) => t.id === item.id || t.id === item.templateId);
+                        const catInfo = INDIRECT_CATEGORY_LABELS[item.category] || INDIRECT_CATEGORY_LABELS.custom;
+
+                        return (
+                          <tr
+                            key={item.id}
+                            className="hover:bg-blue-50/40 dark:hover:bg-blue-950/20 transition-colors"
+                          >
+                            <td className="py-2.5 px-3 text-center font-mono text-slate-400 text-[11px]">
+                              {idx + 1}
+                            </td>
+                            <td className="py-2.5 px-3">
+                              <div className="font-bold text-slate-800 dark:text-slate-100">
+                                {item.name}
+                              </div>
+                              {item.note && (
+                                <div className="text-[11px] text-slate-400 mt-0.5 line-clamp-1">
+                                  {item.note}
+                                </div>
+                              )}
+                            </td>
+                            <td className="py-2.5 px-3 text-center">
+                              <span className={`inline-block text-[10px] px-2 py-0.5 rounded-full font-medium ${catInfo.badgeColor}`}>
+                                {catInfo.label}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 text-center font-mono font-medium text-slate-600 dark:text-slate-300">
+                              <span className="font-bold text-blue-700 dark:text-blue-300">{item.unitTimeMinutes}</span> นาที/{item.unitLabel || 'ราย'}
+                            </td>
+                            <td className="py-2.5 px-3">
+                              <div className="flex items-center justify-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const val = Math.max(0, (item.count || 0) - 1);
+                                    const updated = (currentDeptData.indirectItems || []).map((i) =>
+                                      i.id === item.id ? { ...i, count: val } : i
+                                    );
+                                    setIndirectItemsForActiveDept(updated);
+                                  }}
+                                  disabled={!canEditActiveDept || (item.count || 0) <= 0}
+                                  className="w-7 h-7 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-30 text-slate-700 dark:text-slate-200 flex items-center justify-center cursor-pointer transition-colors"
+                                >
+                                  <Minus className="w-3.5 h-3.5" />
+                                </button>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  value={item.count}
+                                  disabled={!canEditActiveDept}
+                                  onChange={(e) => {
+                                    const val = Math.max(0, parseInt(e.target.value) || 0);
+                                    const updated = (currentDeptData.indirectItems || []).map((i) =>
+                                      i.id === item.id ? { ...i, count: val } : i
+                                    );
+                                    setIndirectItemsForActiveDept(updated);
+                                  }}
+                                  className="w-16 py-1 px-1 text-center font-mono font-black text-xs sm:text-sm bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-blue-500 shadow-2xs"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const val = (item.count || 0) + 1;
+                                    const updated = (currentDeptData.indirectItems || []).map((i) =>
+                                      i.id === item.id ? { ...i, count: val } : i
+                                    );
+                                    setIndirectItemsForActiveDept(updated);
+                                  }}
+                                  disabled={!canEditActiveDept}
+                                  className="w-7 h-7 rounded-lg bg-blue-100 hover:bg-blue-200 dark:bg-blue-900/60 dark:hover:bg-blue-800 text-blue-700 dark:text-blue-300 flex items-center justify-center cursor-pointer transition-colors"
+                                >
+                                  <Plus className="w-3.5 h-3.5" />
+                                </button>
+                                <span className="text-[11px] text-slate-500 font-medium ml-1">
+                                  {item.unitLabel || 'ราย'}
+                                </span>
+                              </div>
+                            </td>
+                            <td className="py-2.5 px-3 text-right">
+                              <span className="font-mono font-bold text-xs text-blue-600 dark:text-blue-400">
+                                {itemHours.toFixed(2)}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 text-center">
+                              {isLinked ? (
+                                <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 font-semibold border border-emerald-200 dark:border-emerald-800" title="ประเภทนี้เชื่อมโยงกับฐานข้อมูล Supabase และแสดงในทุกวัน">
+                                  <Cloud className="w-3 h-3 text-emerald-600" />
+                                  <span>เชื่อมทุกวัน</span>
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 font-medium" title="บันทึกเฉพาะวันนี้เท่านั้น">
+                                  <span>เฉพาะวันนี้</span>
+                                </span>
+                              )}
+                            </td>
+                            {canEditActiveDept && (
+                              <td className="py-2.5 px-3 text-center">
+                                <div className="flex items-center justify-center gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenEditIndirect(item)}
+                                    title="แก้ไขประเภทงานรองนี้"
+                                    className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950 transition-colors cursor-pointer"
+                                  >
+                                    <Edit2 className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRequestDelete('indirect', item)}
+                                    title="ลบประเภทงานรองนี้"
+                                    className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950 transition-colors cursor-pointer"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </td>
+                            )}
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                  <tfoot>
+                    <tr className="bg-blue-50/50 dark:bg-blue-950/30 border-t-2 border-blue-200 dark:border-blue-800 font-bold">
+                      <td colSpan={4} className="py-2.5 px-4 text-slate-700 dark:text-slate-300">
+                        รวมชั่วโมงภาระงานรองทั้งหมด (Total Indirect Care Hours):
+                      </td>
+                      <td colSpan={canEditActiveDept ? 4 : 3} className="py-2.5 px-4 text-right">
+                        <span className="font-mono font-black text-sm text-blue-700 dark:text-blue-300 mr-1">
+                          {activeCalc.indirectCareHours}
+                        </span>
+                        <span className="text-xs text-blue-600 dark:text-blue-400 font-semibold">ชั่วโมง/วัน</span>
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
               </div>
             </div>
 
-            {/* ========================================== */}
-            {/* ส่วนที่ 3: งานสนับสนุน (Support Work) */}
-            {/* สูตร: ∑ (ความถี่กิจกรรม x เวลาที่ใช้จริงต่อกิจกรรม) */}
-            {/* ========================================== */}
-            <div className="space-y-3 pt-3 border-t border-slate-100 dark:border-slate-800">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 bg-purple-50/70 dark:bg-purple-950/40 p-3 rounded-xl border border-purple-200/50 dark:border-purple-800/50">
+            {/* ======================================================== */}
+            {/* ส่วนที่ 3: ตารางบันทึกงานสนับสนุน (Support Work Table)     */}
+            {/* สูตร: ∑ (ความถี่ x เวลาต่อกิจกรรม) แปลงเฉลี่ยต่อวัน     */}
+            {/* ======================================================== */}
+            <div className="space-y-3 pt-4 border-t border-slate-100 dark:border-slate-800">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-gradient-to-r from-purple-50/90 via-fuchsia-50/70 to-purple-50/90 dark:from-purple-950/40 dark:via-fuchsia-950/30 dark:to-purple-950/40 p-3.5 rounded-2xl border border-purple-200/70 dark:border-purple-800/60 shadow-2xs">
                 <div>
                   <div className="flex items-center gap-2">
-                    <span className="w-2.5 h-2.5 rounded-full bg-purple-500" />
-                    <span className="font-bold text-xs text-purple-950 dark:text-purple-200">
-                      ส่วนที่ 3: งานสนับสนุน (Support Work / Ward Management)
+                    <span className="w-2.5 h-2.5 rounded-full bg-purple-600 animate-pulse" />
+                    <span className="font-bold text-xs sm:text-sm text-purple-950 dark:text-purple-100 flex items-center gap-1.5">
+                      <span>ส่วนที่ 3: งานสนับสนุน (Support Work / Ward Management)</span>
+                      <span className="text-[10px] px-2 py-0.5 rounded-full bg-purple-100 dark:bg-purple-900/60 text-purple-800 dark:text-purple-300 font-semibold border border-purple-200 dark:border-purple-700/60">
+                        {currentDeptData.supportItems?.length || 0} ประเภท
+                      </span>
                     </span>
                   </div>
-                  <p className="text-[10px] text-purple-700/80 dark:text-purple-400/80 mt-0.5">
-                    สูตร: ∑ (ความถี่กิจกรรม × เวลาที่ใช้จริงต่อกิจกรรม) • บริหารวอร์ด, ตรวจเครื่องมือแพทย์, IC, CQI/HA
+                  <p className="text-[11px] text-purple-800/80 dark:text-purple-300/80 mt-1 leading-snug">
+                    <strong>สูตร:</strong> ∑ (ความถี่กิจกรรม × เวลาต่อครั้ง) แปลงเป็นชั่วโมงเฉลี่ยต่อวัน • เช่น บริหารวอร์ด, ตรวจรถช่วยชีวิต, IC, CQI/HA, ตรวจนับคลังยา
                   </p>
                 </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-mono font-bold text-purple-800 dark:text-purple-300">
-                    รวม: {activeCalc.supportCareHours} ชม./วัน
-                  </span>
+
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <div className="px-3 py-1.5 rounded-xl bg-white/80 dark:bg-slate-900/80 border border-purple-200 dark:border-purple-800 flex items-center gap-1.5 shadow-2xs">
+                    <span className="text-[11px] text-slate-500 dark:text-slate-400">ค่างานสนับสนุนรวม:</span>
+                    <span className="font-mono font-black text-sm text-purple-700 dark:text-purple-300">
+                      {activeCalc.supportCareHours}
+                    </span>
+                    <span className="text-[11px] text-slate-500">ชม./วัน</span>
+                  </div>
+
                   <button
                     type="button"
-                    onClick={handleOpenAddSupport}
-                    className="px-2.5 py-1 rounded-lg bg-purple-600 hover:bg-purple-500 text-white text-[11px] font-bold flex items-center gap-1 shadow-xs"
+                    onClick={() => setIsCatalogModalOpen(true)}
+                    className="px-2.5 py-1.5 rounded-xl bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 text-xs font-semibold flex items-center gap-1.5 shadow-2xs transition-all cursor-pointer"
+                    title="เปิดคลังประเภทงานที่บันทึกในฐานข้อมูล"
                   >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>เพิ่มประเภทงานสนับสนุน</span>
+                    <Database className="w-3.5 h-3.5 text-purple-600 dark:text-purple-400" />
+                    <span>คลังประเภทงาน ({activityTemplates?.length || 0})</span>
                   </button>
+
+                  {canEditActiveDept && (
+                    <button
+                      type="button"
+                      onClick={() => handleOpenAddModal('support')}
+                      className="px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold flex items-center gap-1.5 shadow-sm hover:shadow-md transition-all active:scale-95 cursor-pointer"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>เพิ่มประเภทงานสนับสนุน</span>
+                    </button>
+                  )}
                 </div>
               </div>
 
-              {/* Support Work Items List */}
-              <div className="space-y-2">
-                {(currentDeptData.supportItems || []).map((item) => {
-                  const sessionMin = Number(item.timeMinutesPerSession || 0);
-                  const count = Number(item.frequencyCount || 0);
-                  let dailyHours = 0;
-                  if (item.frequencyType === 'daily') dailyHours = (count * sessionMin) / 60;
-                  else if (item.frequencyType === 'weekly') dailyHours = ((count * sessionMin) / 60) / 7;
-                  else if (item.frequencyType === 'monthly') dailyHours = ((count * sessionMin) / 60) / 30;
-                  else dailyHours = (count * sessionMin) / 60;
+              {/* ตารางบันทึกส่วนที่ 3: งานสนับสนุน */}
+              <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xs">
+                <table className="w-full text-left border-collapse text-xs min-w-[750px]">
+                  <thead>
+                    <tr className="bg-slate-50/90 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-700 text-[11px] font-bold text-slate-600 dark:text-slate-300 uppercase tracking-wider">
+                      <th className="py-2.5 px-3 w-10 text-center">#</th>
+                      <th className="py-2.5 px-3">ประเภทกิจกรรมงานสนับสนุน / บริหารวอร์ด</th>
+                      <th className="py-2.5 px-3 text-center w-36">หมวดหมู่</th>
+                      <th className="py-2.5 px-3 text-center w-32">รอบความถี่</th>
+                      <th className="py-2.5 px-3 text-center w-40">จำนวนครั้งตามรอบ</th>
+                      <th className="py-2.5 px-3 text-center w-32">เวลาต่อครั้ง (นาที)</th>
+                      <th className="py-2.5 px-3 text-right w-28">ค่างานเฉลี่ย (ชม./วัน)</th>
+                      <th className="py-2.5 px-3 text-center w-32">ฐานข้อมูล</th>
+                      {canEditActiveDept && <th className="py-2.5 px-3 text-center w-20">จัดการ</th>}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {(currentDeptData.supportItems || []).length === 0 ? (
+                      <tr>
+                        <td colSpan={canEditActiveDept ? 9 : 8} className="py-8 text-center text-slate-400">
+                          <p className="font-medium text-xs">ยังไม่มีรายการงานสนับสนุนในฝ่ายงานนี้</p>
+                          {canEditActiveDept && (
+                            <button
+                              type="button"
+                              onClick={() => handleOpenAddModal('support')}
+                              className="mt-2 text-purple-600 hover:underline text-xs font-semibold inline-flex items-center gap-1 cursor-pointer"
+                            >
+                              <Plus className="w-3.5 h-3.5" /> เพิ่มประเภทงานสนับสนุนแรก
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ) : (
+                      (currentDeptData.supportItems || []).map((item, idx) => {
+                        const sessionMin = Number(item.timeMinutesPerSession || 0);
+                        const count = Number(item.frequencyCount || 0);
+                        let dailyHours = 0;
+                        if (item.frequencyType === 'daily') dailyHours = (count * sessionMin) / 60;
+                        else if (item.frequencyType === 'weekly') dailyHours = ((count * sessionMin) / 60) / 7;
+                        else if (item.frequencyType === 'monthly') dailyHours = ((count * sessionMin) / 60) / 30;
+                        else dailyHours = (count * sessionMin) / 60;
 
-                  const freqLabel =
-                    item.frequencyType === 'daily'
-                      ? 'ต่อวัน'
-                      : item.frequencyType === 'weekly'
-                      ? 'ต่อสัปดาห์'
-                      : item.frequencyType === 'monthly'
-                      ? 'ต่อเดือน'
-                      : 'ครั้ง';
+                        const isLinked = !!item.templateId || activityTemplates.some((t) => t.id === item.id || t.id === item.templateId);
+                        const catInfo = SUPPORT_CATEGORY_LABELS[item.category] || SUPPORT_CATEGORY_LABELS.custom;
 
-                  return (
-                    <div
-                      key={item.id}
-                      className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200/70 dark:border-slate-700/70 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs hover:border-purple-300 dark:hover:border-purple-700 transition-colors"
-                    >
-                      <div className="space-y-0.5 flex-1">
-                        <div className="flex items-center gap-2">
-                          <span className="font-bold text-slate-800 dark:text-slate-200">
-                            {item.name}
-                          </span>
-                          <span className="text-[10px] px-1.5 py-0.2 rounded bg-purple-100 text-purple-800 dark:bg-purple-950 dark:text-purple-300">
-                            {item.timeMinutesPerSession} นาที/{freqLabel} ({item.frequencyCount} ครั้ง)
-                          </span>
-                        </div>
-                        {item.note && (
-                          <div className="text-[11px] text-slate-400">{item.note}</div>
-                        )}
-                      </div>
+                        const freqText =
+                          item.frequencyType === 'daily'
+                            ? 'ทุกวัน (Daily)'
+                            : item.frequencyType === 'weekly'
+                            ? 'ต่อสัปดาห์ (Weekly)'
+                            : item.frequencyType === 'monthly'
+                            ? 'ต่อเดือน (Monthly)'
+                            : 'ตามจริง';
 
-                      {/* Controls */}
-                      <div className="flex items-center gap-3 shrink-0">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-slate-400 text-[11px]">เวลาต่อครั้ง:</span>
-                          <input
-                            type="number"
-                            min="1"
-                            value={item.timeMinutesPerSession}
-                            onChange={(e) => {
-                              const val = Math.max(1, parseInt(e.target.value) || 1);
-                              const updated = (currentDeptData.supportItems || []).map((i) =>
-                                i.id === item.id ? { ...i, timeMinutesPerSession: val } : i
-                              );
-                              setSupportItemsForActiveDept(updated);
-                            }}
-                            className="w-16 py-1 px-2 text-center font-mono font-bold text-xs bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white"
-                          />
-                          <span className="text-slate-400 text-[11px]">นาที</span>
-                        </div>
-
-                        <div className="text-right min-w-[70px]">
-                          <span className="font-mono font-bold text-purple-600 dark:text-purple-400 text-xs">
-                            {dailyHours.toFixed(2)} ชม./วัน
-                          </span>
-                        </div>
-
-                        {/* Edit & Delete Buttons */}
-                        <div className="flex items-center gap-1 pl-2 border-l border-slate-200 dark:border-slate-700">
-                          <button
-                            type="button"
-                            onClick={() => handleOpenEditSupport(item)}
-                            title="แก้ไขประเภทงานสนับสนุนนี้"
-                            className="p-1 rounded text-slate-400 hover:text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-950"
+                        return (
+                          <tr
+                            key={item.id}
+                            className="hover:bg-purple-50/40 dark:hover:bg-purple-950/20 transition-colors"
                           >
-                            <Edit2 className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteSupportItem(item.id)}
-                            title="ลบประเภทงานสนับสนุนนี้"
-                            className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
+                            <td className="py-2.5 px-3 text-center font-mono text-slate-400 text-[11px]">
+                              {idx + 1}
+                            </td>
+                            <td className="py-2.5 px-3">
+                              <div className="font-bold text-slate-800 dark:text-slate-100">
+                                {item.name}
+                              </div>
+                              {item.note && (
+                                <div className="text-[11px] text-slate-400 mt-0.5 line-clamp-1">
+                                  {item.note}
+                                </div>
+                              )}
+                            </td>
+                            <td className="py-2.5 px-3 text-center">
+                              <span className={`inline-block text-[10px] px-2 py-0.5 rounded-full font-medium ${catInfo.badgeColor}`}>
+                                {catInfo.label}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 text-center">
+                              <span className="text-[11px] px-2 py-0.5 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium">
+                                {freqText}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3">
+                              <div className="flex items-center justify-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const val = Math.max(0, (item.frequencyCount || 0) - 1);
+                                    const updated = (currentDeptData.supportItems || []).map((i) =>
+                                      i.id === item.id ? { ...i, frequencyCount: val } : i
+                                    );
+                                    setSupportItemsForActiveDept(updated);
+                                  }}
+                                  disabled={!canEditActiveDept || (item.frequencyCount || 0) <= 0}
+                                  className="w-7 h-7 rounded-lg bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 disabled:opacity-30 text-slate-700 dark:text-slate-200 flex items-center justify-center cursor-pointer transition-colors"
+                                >
+                                  <Minus className="w-3.5 h-3.5" />
+                                </button>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  value={item.frequencyCount}
+                                  disabled={!canEditActiveDept}
+                                  onChange={(e) => {
+                                    const val = Math.max(0, parseInt(e.target.value) || 0);
+                                    const updated = (currentDeptData.supportItems || []).map((i) =>
+                                      i.id === item.id ? { ...i, frequencyCount: val } : i
+                                    );
+                                    setSupportItemsForActiveDept(updated);
+                                  }}
+                                  className="w-16 py-1 px-1 text-center font-mono font-black text-xs sm:text-sm bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-purple-500 shadow-2xs"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const val = (item.frequencyCount || 0) + 1;
+                                    const updated = (currentDeptData.supportItems || []).map((i) =>
+                                      i.id === item.id ? { ...i, frequencyCount: val } : i
+                                    );
+                                    setSupportItemsForActiveDept(updated);
+                                  }}
+                                  disabled={!canEditActiveDept}
+                                  className="w-7 h-7 rounded-lg bg-purple-100 hover:bg-purple-200 dark:bg-purple-900/60 dark:hover:bg-purple-800 text-purple-700 dark:text-purple-300 flex items-center justify-center cursor-pointer transition-colors"
+                                >
+                                  <Plus className="w-3.5 h-3.5" />
+                                </button>
+                                <span className="text-[11px] text-slate-500 font-medium ml-1">ครั้ง</span>
+                              </div>
+                            </td>
+                            <td className="py-2.5 px-3 text-center font-mono font-semibold text-slate-700 dark:text-slate-300">
+                              <span className="text-purple-700 dark:text-purple-300 font-bold">{item.timeMinutesPerSession}</span> นาที
+                            </td>
+                            <td className="py-2.5 px-3 text-right">
+                              <span className="font-mono font-bold text-xs text-purple-600 dark:text-purple-400">
+                                {dailyHours.toFixed(2)}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 text-center">
+                              {isLinked ? (
+                                <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 font-semibold border border-emerald-200 dark:border-emerald-800" title="ประเภทนี้เชื่อมโยงกับฐานข้อมูล Supabase และแสดงในทุกวัน">
+                                  <Cloud className="w-3 h-3 text-emerald-600" />
+                                  <span>เชื่อมทุกวัน</span>
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-500 font-medium" title="บันทึกเฉพาะวันนี้เท่านั้น">
+                                  <span>เฉพาะวันนี้</span>
+                                </span>
+                              )}
+                            </td>
+                            {canEditActiveDept && (
+                              <td className="py-2.5 px-3 text-center">
+                                <div className="flex items-center justify-center gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenEditSupport(item)}
+                                    title="แก้ไขประเภทงานสนับสนุนนี้"
+                                    className="p-1.5 rounded-lg text-slate-400 hover:text-purple-600 hover:bg-purple-50 dark:hover:bg-purple-950 transition-colors cursor-pointer"
+                                  >
+                                    <Edit2 className="w-3.5 h-3.5" />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleRequestDelete('support', item)}
+                                    title="ลบประเภทงานสนับสนุนนี้"
+                                    className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950 transition-colors cursor-pointer"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </td>
+                            )}
+                          </tr>
+                        );
+                      })
+                    )}
+                  </tbody>
+                  <tfoot>
+                    <tr className="bg-purple-50/50 dark:bg-purple-950/30 border-t-2 border-purple-200 dark:border-purple-800 font-bold">
+                      <td colSpan={4} className="py-2.5 px-4 text-slate-700 dark:text-slate-300">
+                        รวมชั่วโมงภาระงานสนับสนุนทั้งหมด (Total Support Care Hours):
+                      </td>
+                      <td colSpan={canEditActiveDept ? 5 : 4} className="py-2.5 px-4 text-right">
+                        <span className="font-mono font-black text-sm text-purple-700 dark:text-purple-300 mr-1">
+                          {activeCalc.supportCareHours}
+                        </span>
+                        <span className="text-xs text-purple-600 dark:text-purple-400 font-semibold">ชั่วโมง/วัน</span>
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
               </div>
             </div>
 
@@ -1338,138 +1744,297 @@ export const DataEntryForm: React.FC<DataEntryFormProps> = ({
       )}
 
       {/* ======================================================== */}
-      {/* Modal: เพิ่ม / แก้ไขประเภทงานรอง (Indirect Care Item Modal) */}
+      {/* Modal 1: เพิ่ม / แก้ไขประเภทงาน (ส่วนที่ 2: งานรอง & ส่วนที่ 3: งานสนับสนุน) */}
+      {/* เชื่อมโยงฐานข้อมูลกลาง (Master Catalog) และลิงค์ทุกวันอัตโนมัติ */}
       {/* ======================================================== */}
-      {editingIndirectItem.isOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in">
-          <div className="bg-white dark:bg-slate-900 rounded-2xl max-w-md w-full border border-slate-200 dark:border-slate-800 p-5 space-y-4 shadow-xl text-xs">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
-              <h3 className="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-2">
-                <Edit2 className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-                <span>{editingIndirectItem.isNew ? 'เพิ่มประเภทงานรองใหม่' : 'แก้ไขประเภทงานรอง'}</span>
-              </h3>
+      {activityItemModal.isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-lg w-full border border-slate-200 dark:border-slate-800 p-5 sm:p-6 space-y-4 shadow-2xl text-xs max-h-[90vh] overflow-y-auto">
+            {/* Header */}
+            <div className="flex items-start justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <span
+                    className={`text-[10px] px-2.5 py-0.5 rounded-full font-bold border ${
+                      activityItemModal.part === 'indirect'
+                        ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/60 dark:text-blue-300 border-blue-200 dark:border-blue-700'
+                        : 'bg-purple-100 text-purple-800 dark:bg-purple-900/60 dark:text-purple-300 border-purple-200 dark:border-purple-700'
+                    }`}
+                  >
+                    {activityItemModal.part === 'indirect'
+                      ? 'ส่วนที่ 2: งานรอง (Indirect Care)'
+                      : 'ส่วนที่ 3: งานสนับสนุน (Support Work)'}
+                  </span>
+                  {activityItemModal.templateId && (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 font-semibold flex items-center gap-1 border border-emerald-200 dark:border-emerald-800">
+                      <Cloud className="w-3 h-3 text-emerald-600" />
+                      <span>เชื่อมฐานข้อมูลกลาง</span>
+                    </span>
+                  )}
+                </div>
+                <h3 className="font-bold text-base text-slate-900 dark:text-white flex items-center gap-2">
+                  <Edit2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                  <span>
+                    {activityItemModal.isNew
+                      ? activityItemModal.part === 'indirect'
+                        ? 'เพิ่มประเภทงานรองใหม่'
+                        : 'เพิ่มประเภทงานสนับสนุนใหม่'
+                      : 'แก้ไขประเภทงาน'}
+                  </span>
+                </h3>
+              </div>
               <button
-                onClick={() => setEditingIndirectItem({ ...editingIndirectItem, isOpen: false })}
-                className="p-1 rounded-lg text-slate-400 hover:text-slate-600"
+                type="button"
+                onClick={() => setActivityItemModal((prev) => ({ ...prev, isOpen: false }))}
+                className="p-1.5 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <div className="space-y-3">
+            {/* Form Fields */}
+            <div className="space-y-3.5">
               <div>
-                <label className="text-slate-600 dark:text-slate-400 font-semibold block mb-1">
-                  ชื่อประเภทงานรอง
+                <label className="text-slate-700 dark:text-slate-300 font-bold block mb-1">
+                  ชื่อประเภทกิจกรรม <span className="text-rose-500">*</span>
                 </label>
                 <input
                   type="text"
-                  placeholder="เช่น บันทึกชาร์จ, เตรียมยา, ส่งต่อเคส..."
-                  value={editingIndirectItem.item.name}
-                  onChange={(e) =>
-                    setEditingIndirectItem({
-                      ...editingIndirectItem,
-                      item: { ...editingIndirectItem.item, name: e.target.value },
-                    })
+                  placeholder={
+                    activityItemModal.part === 'indirect'
+                      ? 'เช่น บันทึกชาร์จ, เตรียมยา/สารน้ำ, ส่งมอบเวร, ประสานงานส่งต่อเคส'
+                      : 'เช่น ตรวจเช็ครถช่วยชีวิต Emergency, บริหารจัดการวอร์ด, งาน IC, พัฒนาคุณภาพ CQI/HA'
                   }
-                  className="w-full p-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 font-medium"
+                  value={activityItemModal.name}
+                  onChange={(e) => setActivityItemModal({ ...activityItemModal, name: e.target.value })}
+                  className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/80 border border-slate-300 dark:border-slate-700 font-medium text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-blue-500"
+                  autoFocus
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="text-slate-600 dark:text-slate-400 font-semibold block mb-1">
-                    เวลามาตรฐานต่อหน่วย (นาที)
+                  <label className="text-slate-700 dark:text-slate-300 font-bold block mb-1">
+                    หมวดหมู่กิจกรรม
                   </label>
-                  <input
-                    type="number"
-                    min="1"
-                    value={editingIndirectItem.item.unitTimeMinutes}
+                  <select
+                    value={activityItemModal.category}
+                    onChange={(e) => setActivityItemModal({ ...activityItemModal, category: e.target.value })}
+                    className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/80 border border-slate-300 dark:border-slate-700 font-medium text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-blue-500"
+                  >
+                    {activityItemModal.part === 'indirect' ? (
+                      <>
+                        <option value="documentation">เวชระเบียน / บันทึกชาร์จ</option>
+                        <option value="medication">เตรียมยา / สารน้ำ</option>
+                        <option value="coordination">ประสานงาน / ส่งต่อเคส</option>
+                        <option value="handover">ส่งมอบเวรข้ามกะ</option>
+                        <option value="custom">งานรองเฉพาะด้าน</option>
+                      </>
+                    ) : (
+                      <>
+                        <option value="ward_management">บริหารวอร์ด / ตรวจเวร</option>
+                        <option value="equipment_check">ตรวจเครื่องมือ / รถช่วยชีวิต</option>
+                        <option value="ic">ป้องกันการติดเชื้อ (IC)</option>
+                        <option value="cqi_ha">พัฒนาคุณภาพ (CQI / HA)</option>
+                        <option value="custom">งานสนับสนุนทั่วไป</option>
+                      </>
+                    )}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="text-slate-700 dark:text-slate-300 font-bold block mb-1">
+                    ขอบเขตฝ่ายงานที่ใช้
+                  </label>
+                  <select
+                    value={activityItemModal.departmentScope}
                     onChange={(e) =>
-                      setEditingIndirectItem({
-                        ...editingIndirectItem,
-                        item: {
-                          ...editingIndirectItem.item,
+                      setActivityItemModal({
+                        ...activityItemModal,
+                        departmentScope: e.target.value as any,
+                      })
+                    }
+                    className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/80 border border-slate-300 dark:border-slate-700 font-medium text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="ALL">ใช้ร่วมกันทุกฝ่าย (ALL Departments)</option>
+                    <option value="ER">เฉพาะฝ่ายอุบัติเหตุและฉุกเฉิน (ER)</option>
+                    <option value="OPD">เฉพาะฝ่ายผู้ป่วยนอก (OPD)</option>
+                    <option value="IPD1">เฉพาะฝ่ายผู้ป่วยใน 1 (IPD1)</option>
+                    <option value="IPD2">เฉพาะฝ่ายผู้ป่วยใน 2 (IPD2)</option>
+                    <option value="LR">เฉพาะฝ่ายห้องคลอด (LR)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Specific inputs for Indirect vs Support */}
+              {activityItemModal.part === 'indirect' ? (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="text-slate-700 dark:text-slate-300 font-bold block mb-1">
+                      เวลามาตรฐาน (นาที/หน่วย)
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      value={activityItemModal.unitTimeMinutes}
+                      onChange={(e) =>
+                        setActivityItemModal({
+                          ...activityItemModal,
                           unitTimeMinutes: Math.max(1, parseInt(e.target.value) || 1),
-                        },
-                      })
-                    }
-                    className="w-full p-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 font-mono font-bold"
-                  />
+                        })
+                      }
+                      className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/80 border border-slate-300 dark:border-slate-700 font-mono font-bold text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-slate-700 dark:text-slate-300 font-bold block mb-1">
+                      หน่วยนับ
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="เช่น ราย, ครั้ง, เคส, ชาร์จ"
+                      value={activityItemModal.unitLabel}
+                      onChange={(e) => setActivityItemModal({ ...activityItemModal, unitLabel: e.target.value })}
+                      className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/80 border border-slate-300 dark:border-slate-700 font-medium text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-slate-700 dark:text-slate-300 font-bold block mb-1">
+                      ปริมาณงานวันนี้
+                    </label>
+                    <input
+                      type="number"
+                      min="0"
+                      value={activityItemModal.todayCount}
+                      onChange={(e) =>
+                        setActivityItemModal({
+                          ...activityItemModal,
+                          todayCount: Math.max(0, parseInt(e.target.value) || 0),
+                        })
+                      }
+                      className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/80 border border-slate-300 dark:border-slate-700 font-mono font-bold text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
                 </div>
-                <div>
-                  <label className="text-slate-600 dark:text-slate-400 font-semibold block mb-1">
-                    หน่วยนับ
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="เช่น ราย, ครั้ง, เวร"
-                    value={editingIndirectItem.item.unitLabel || 'ราย'}
-                    onChange={(e) =>
-                      setEditingIndirectItem({
-                        ...editingIndirectItem,
-                        item: { ...editingIndirectItem.item, unitLabel: e.target.value },
-                      })
-                    }
-                    className="w-full p-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700"
-                  />
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="text-slate-700 dark:text-slate-300 font-bold block mb-1">
+                      รอบความถี่
+                    </label>
+                    <select
+                      value={activityItemModal.frequencyType}
+                      onChange={(e) =>
+                        setActivityItemModal({
+                          ...activityItemModal,
+                          frequencyType: e.target.value as any,
+                        })
+                      }
+                      className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/80 border border-slate-300 dark:border-slate-700 font-medium text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-purple-500"
+                    >
+                      <option value="daily">ทุกวัน (Daily)</option>
+                      <option value="weekly">ต่อสัปดาห์ (Weekly)</option>
+                      <option value="monthly">ต่อเดือน (Monthly)</option>
+                      <option value="custom">ตามครั้งจริง</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-slate-700 dark:text-slate-300 font-bold block mb-1">
+                      จำนวนครั้ง / รอบ
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      value={activityItemModal.frequencyCount}
+                      onChange={(e) =>
+                        setActivityItemModal({
+                          ...activityItemModal,
+                          frequencyCount: Math.max(1, parseInt(e.target.value) || 1),
+                        })
+                      }
+                      className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/80 border border-slate-300 dark:border-slate-700 font-mono font-bold text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-purple-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-slate-700 dark:text-slate-300 font-bold block mb-1">
+                      เวลาที่ใช้ต่อครั้ง (นาที)
+                    </label>
+                    <input
+                      type="number"
+                      min="1"
+                      value={activityItemModal.unitTimeMinutes}
+                      onChange={(e) =>
+                        setActivityItemModal({
+                          ...activityItemModal,
+                          unitTimeMinutes: Math.max(1, parseInt(e.target.value) || 1),
+                        })
+                      }
+                      className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/80 border border-slate-300 dark:border-slate-700 font-mono font-bold text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-purple-500"
+                    />
+                  </div>
                 </div>
-              </div>
+              )}
 
               <div>
-                <label className="text-slate-600 dark:text-slate-400 font-semibold block mb-1">
-                  ปริมาณงานเริ่มต้น
-                </label>
-                <input
-                  type="number"
-                  min="0"
-                  value={editingIndirectItem.item.count}
-                  onChange={(e) =>
-                    setEditingIndirectItem({
-                      ...editingIndirectItem,
-                      item: {
-                        ...editingIndirectItem.item,
-                        count: Math.max(0, parseInt(e.target.value) || 0),
-                      },
-                    })
-                  }
-                  className="w-full p-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 font-mono font-bold"
-                />
-              </div>
-
-              <div>
-                <label className="text-slate-600 dark:text-slate-400 font-semibold block mb-1">
-                  คำอธิบายเพิ่มเติม
+                <label className="text-slate-700 dark:text-slate-300 font-bold block mb-1">
+                  คำอธิบายหรือแนวทางปฏิบัติ (Note)
                 </label>
                 <input
                   type="text"
-                  placeholder="เช่น กิจกรรมเขียน Focus Note และสรุปจำหน่าย"
-                  value={editingIndirectItem.item.note || ''}
-                  onChange={(e) =>
-                    setEditingIndirectItem({
-                      ...editingIndirectItem,
-                      item: { ...editingIndirectItem.item, note: e.target.value },
-                    })
-                  }
-                  className="w-full p-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300"
+                  placeholder="เช่น กิจกรรมเขียน Focus Note และสรุปจำหน่าย หรือ แนวทางตรวจสอบรถ Defibrillator"
+                  value={activityItemModal.note}
+                  onChange={(e) => setActivityItemModal({ ...activityItemModal, note: e.target.value })}
+                  className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/80 border border-slate-300 dark:border-slate-700 font-medium text-slate-900 dark:text-white focus:outline-hidden focus:ring-2 focus:ring-blue-500"
                 />
+              </div>
+
+              {/* Database Link Checkbox */}
+              <div className="p-3.5 rounded-2xl bg-gradient-to-r from-emerald-50 via-teal-50 to-cyan-50 dark:from-emerald-950/40 dark:via-teal-950/30 dark:to-cyan-950/30 border border-emerald-300 dark:border-emerald-800/60 shadow-2xs">
+                <label className="flex items-start gap-2.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={activityItemModal.linkToDatabase}
+                    onChange={(e) =>
+                      setActivityItemModal({
+                        ...activityItemModal,
+                        linkToDatabase: e.target.checked,
+                      })
+                    }
+                    className="mt-0.5 w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300"
+                  />
+                  <div>
+                    <span className="font-bold text-xs text-emerald-900 dark:text-emerald-200 flex items-center gap-1.5">
+                      <Database className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
+                      <span>บันทึกลงฐานข้อมูลแม่แบบ และเชื่อมโยงกับทุกวันที่บันทึกในระบบ</span>
+                    </span>
+                    <p className="text-[11px] text-emerald-800/80 dark:text-emerald-300/80 mt-0.5 leading-snug">
+                      เมื่อติ๊กเลือก ประเภทงานนี้จะถูกบันทึกเป็นแม่แบบกลาง (Master Activity Template) ในฐานข้อมูล และปรากฏในตารางของทุกวันที่บันทึกไว้ในระบบทันที
+                    </p>
+                  </div>
+                </label>
               </div>
             </div>
 
-            <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+            {/* Footer Buttons */}
+            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100 dark:border-slate-800">
               <button
                 type="button"
-                onClick={() => setEditingIndirectItem({ ...editingIndirectItem, isOpen: false })}
-                className="px-3 py-1.5 rounded-xl text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
+                onClick={() => setActivityItemModal((prev) => ({ ...prev, isOpen: false }))}
+                className="px-4 py-2 rounded-xl text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 font-semibold cursor-pointer transition-colors"
               >
                 ยกเลิก
               </button>
               <button
                 type="button"
-                onClick={handleSaveIndirectItem}
-                disabled={!editingIndirectItem.item.name.trim()}
-                className="px-4 py-1.5 rounded-xl font-bold bg-blue-600 hover:bg-blue-500 text-white shadow-sm disabled:opacity-50"
+                onClick={handleSaveActivityModal}
+                disabled={!activityItemModal.name.trim()}
+                className={`px-5 py-2 rounded-xl font-bold text-white shadow-md transition-all active:scale-95 cursor-pointer disabled:opacity-50 ${
+                  activityItemModal.part === 'indirect'
+                    ? 'bg-blue-600 hover:bg-blue-500'
+                    : 'bg-purple-600 hover:bg-purple-500'
+                }`}
               >
-                บันทึกรายการ
+                บันทึกประเภทงาน
               </button>
             </div>
           </div>
@@ -1477,144 +2042,314 @@ export const DataEntryForm: React.FC<DataEntryFormProps> = ({
       )}
 
       {/* ======================================================== */}
-      {/* Modal: เพิ่ม / แก้ไขประเภทงานสนับสนุน (Support Work Modal) */}
+      {/* Modal 2: ยืนยันการลบประเภทงาน (Delete Confirmation Modal)   */}
       {/* ======================================================== */}
-      {editingSupportItem.isOpen && (
+      {deleteDialog.isOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in">
-          <div className="bg-white dark:bg-slate-900 rounded-2xl max-w-md w-full border border-slate-200 dark:border-slate-800 p-5 space-y-4 shadow-xl text-xs">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
-              <h3 className="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-2">
-                <Edit2 className="w-4 h-4 text-purple-600 dark:text-purple-400" />
-                <span>{editingSupportItem.isNew ? 'เพิ่มประเภทงานสนับสนุนใหม่' : 'แก้ไขประเภทงานสนับสนุน'}</span>
-              </h3>
-              <button
-                onClick={() => setEditingSupportItem({ ...editingSupportItem, isOpen: false })}
-                className="p-1 rounded-lg text-slate-400 hover:text-slate-600"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <div className="space-y-3">
-              <div>
-                <label className="text-slate-600 dark:text-slate-400 font-semibold block mb-1">
-                  ชื่อประเภทงานสนับสนุน
-                </label>
-                <input
-                  type="text"
-                  placeholder="เช่น บริหารวอร์ด, ตรวจเครื่องมือ, IC, CQI..."
-                  value={editingSupportItem.item.name}
-                  onChange={(e) =>
-                    setEditingSupportItem({
-                      ...editingSupportItem,
-                      item: { ...editingSupportItem.item, name: e.target.value },
-                    })
-                  }
-                  className="w-full p-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 font-medium"
-                />
+          <div className="bg-white dark:bg-slate-900 rounded-3xl max-w-md w-full border border-slate-200 dark:border-slate-800 p-5 sm:p-6 space-y-4 shadow-2xl text-xs">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-rose-100 dark:bg-rose-950/60 border border-rose-300 dark:border-rose-800 flex items-center justify-center text-rose-600 shrink-0">
+                <Trash2 className="w-5 h-5" />
               </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="text-slate-600 dark:text-slate-400 font-semibold block mb-1">
-                    ความถี่
-                  </label>
-                  <select
-                    value={editingSupportItem.item.frequencyType}
-                    onChange={(e) =>
-                      setEditingSupportItem({
-                        ...editingSupportItem,
-                        item: {
-                          ...editingSupportItem.item,
-                          frequencyType: e.target.value as any,
-                        },
-                      })
-                    }
-                    className="w-full p-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 font-medium"
-                  >
-                    <option value="daily">ทุกวัน (Daily)</option>
-                    <option value="weekly">ต่อสัปดาห์ (Weekly)</option>
-                    <option value="monthly">ต่อเดือน (Monthly)</option>
-                    <option value="custom">ตามครั้งจริง</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="text-slate-600 dark:text-slate-400 font-semibold block mb-1">
-                    จำนวนครั้ง
-                  </label>
-                  <input
-                    type="number"
-                    min="1"
-                    value={editingSupportItem.item.frequencyCount}
-                    onChange={(e) =>
-                      setEditingSupportItem({
-                        ...editingSupportItem,
-                        item: {
-                          ...editingSupportItem.item,
-                          frequencyCount: Math.max(1, parseInt(e.target.value) || 1),
-                        },
-                      })
-                    }
-                    className="w-full p-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 font-mono font-bold"
-                  />
-                </div>
-              </div>
-
               <div>
-                <label className="text-slate-600 dark:text-slate-400 font-semibold block mb-1">
-                  เวลาที่ใช้จริงต่อกิจกรรม (นาที)
-                </label>
-                <input
-                  type="number"
-                  min="1"
-                  value={editingSupportItem.item.timeMinutesPerSession}
-                  onChange={(e) =>
-                    setEditingSupportItem({
-                      ...editingSupportItem,
-                      item: {
-                        ...editingSupportItem.item,
-                        timeMinutesPerSession: Math.max(1, parseInt(e.target.value) || 1),
-                      },
-                    })
-                  }
-                  className="w-full p-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 font-mono font-bold"
-                />
-              </div>
-
-              <div>
-                <label className="text-slate-600 dark:text-slate-400 font-semibold block mb-1">
-                  คำอธิบายรายละเอียด
-                </label>
-                <input
-                  type="text"
-                  placeholder="เช่น ตรวจสอบรถ Emergency และเครื่อง Defibrillator"
-                  value={editingSupportItem.item.note || ''}
-                  onChange={(e) =>
-                    setEditingSupportItem({
-                      ...editingSupportItem,
-                      item: { ...editingSupportItem.item, note: e.target.value },
-                    })
-                  }
-                  className="w-full p-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-600 dark:text-slate-300"
-                />
+                <h3 className="font-bold text-sm text-slate-900 dark:text-white">
+                  ยืนยันการลบประเภทงาน
+                </h3>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                  {deleteDialog.part === 'indirect' ? 'ส่วนที่ 2: งานรอง' : 'ส่วนที่ 3: งานสนับสนุน'}
+                </p>
               </div>
             </div>
 
-            <div className="flex justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+            <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700">
+              <p className="font-bold text-slate-800 dark:text-slate-200 text-xs">
+                {deleteDialog.name}
+              </p>
+            </div>
+
+            <p className="text-[11px] text-slate-600 dark:text-slate-400 leading-relaxed">
+              คุณต้องการลบรายการนี้ออกจากระบบอย่างไร?
+            </p>
+
+            <div className="space-y-2 pt-1">
               <button
                 type="button"
-                onClick={() => setEditingSupportItem({ ...editingSupportItem, isOpen: false })}
-                className="px-3 py-1.5 rounded-xl text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800"
+                onClick={() => handleConfirmDelete(false)}
+                className="w-full py-2.5 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 font-bold text-xs flex items-center justify-center gap-2 transition-all cursor-pointer border border-slate-200 dark:border-slate-700"
+              >
+                <span>ลบเฉพาะวันที่บันทึกนี้เท่านั้น ({formData.date})</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleConfirmDelete(true)}
+                className="w-full py-2.5 px-3 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>ลบออกจากฐานข้อมูลกลาง และทุกวันที่บันทึกไว้ในระบบทั้งหมด</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setDeleteDialog((prev) => ({ ...prev, isOpen: false }))}
+                className="w-full py-2 text-center text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 font-semibold text-xs cursor-pointer"
               >
                 ยกเลิก
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ======================================================== */}
+      {/* Modal 3: คลังประเภทงานมาตรฐาน (Master Activity Catalog)      */}
+      {/* เปิดดูรายการแม่แบบทั้งหมดในฐานข้อมูล และเลือกนำเข้าได้ทันที     */}
+      {/* ======================================================== */}
+      {isCatalogModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-xs animate-in fade-in">
+          <div className="relative w-full max-w-3xl bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl flex flex-col max-h-[88vh] overflow-hidden text-xs">
+            {/* Header */}
+            <div className="p-4 sm:p-5 border-b border-slate-200 dark:border-slate-800 bg-linear-to-r from-blue-50/80 via-indigo-50/50 to-purple-50/80 dark:from-slate-800/90 dark:via-slate-800/70 dark:to-slate-800/90 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-2xl bg-blue-600 text-white shadow-md">
+                  <Database className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-sm sm:text-base text-slate-900 dark:text-white flex items-center gap-2">
+                    <span>คลังประเภทงานมาตรฐานในฐานข้อมูล</span>
+                    <span className="text-[11px] px-2 py-0.5 rounded-full bg-blue-100 dark:bg-blue-900/60 text-blue-700 dark:text-blue-300 font-semibold">
+                      {activityTemplates.length} รายการ
+                    </span>
+                  </h3>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    ฝ่ายที่กำลังเปิด: <strong className="text-blue-600 dark:text-blue-400">{DEPARTMENT_LABELS[activeDept]?.short || activeDept}</strong> • เลือกนำเข้า หรือ ซิงค์เชื่อมโยงกับทุกวัน
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                {onSyncAllDatesWithTemplates && (
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await onSyncAllDatesWithTemplates();
+                    }}
+                    className="px-2.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
+                    title="เชื่อมโยงประเภทงานทั้งหมดในฐานข้อมูลกับทุกวันที่บันทึก"
+                  >
+                    <RotateCw className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">ซิงค์กับทุกวัน</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setIsCatalogModalOpen(false)}
+                  className="p-1.5 rounded-xl text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Filters */}
+            <div className="p-3 sm:p-4 border-b border-slate-100 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/40 flex flex-wrap items-center justify-between gap-2.5">
+              <div className="relative flex-1 min-w-[200px]">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  placeholder="ค้นหาชื่อประเภทกิจกรรม..."
+                  value={catalogSearchTerm}
+                  onChange={(e) => setCatalogSearchTerm(e.target.value)}
+                  className="w-full pl-8 pr-3 py-1.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs font-medium focus:outline-hidden focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px] text-slate-500">ส่วนงาน:</span>
+                <div className="inline-flex rounded-xl p-0.5 bg-slate-200/80 dark:bg-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => setCatalogPartFilter('all')}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                      catalogPartFilter === 'all'
+                        ? 'bg-white dark:bg-slate-700 text-slate-900 dark:text-white shadow-xs'
+                        : 'text-slate-600 dark:text-slate-400'
+                    }`}
+                  >
+                    ทั้งหมด
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCatalogPartFilter('indirect')}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                      catalogPartFilter === 'indirect'
+                        ? 'bg-blue-600 text-white shadow-xs'
+                        : 'text-slate-600 dark:text-slate-400'
+                    }`}
+                  >
+                    งานรอง (ส่วน 2)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCatalogPartFilter('support')}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all cursor-pointer ${
+                      catalogPartFilter === 'support'
+                        ? 'bg-purple-600 text-white shadow-xs'
+                        : 'text-slate-600 dark:text-slate-400'
+                    }`}
+                  >
+                    งานสนับสนุน (ส่วน 3)
+                  </button>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1.5">
+                <span className="text-[11px] text-slate-500">ฝ่าย:</span>
+                <select
+                  value={catalogDeptFilter}
+                  onChange={(e) => setCatalogDeptFilter(e.target.value as any)}
+                  className="py-1 px-2 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-[11px] font-medium"
+                >
+                  <option value="all">ทุกฝ่ายงาน</option>
+                  <option value="ALL">ส่วนกลาง (ALL)</option>
+                  <option value="ER">ER</option>
+                  <option value="OPD">OPD</option>
+                  <option value="IPD1">IPD1</option>
+                  <option value="IPD2">IPD2</option>
+                  <option value="LR">LR</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Template List */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-2">
+              {activityTemplates
+                .filter((tpl) => {
+                  if (catalogPartFilter !== 'all' && tpl.workloadPart !== catalogPartFilter) return false;
+                  if (catalogDeptFilter !== 'all' && tpl.department !== catalogDeptFilter) return false;
+                  if (catalogSearchTerm.trim()) {
+                    const q = catalogSearchTerm.toLowerCase();
+                    return (
+                      tpl.name.toLowerCase().includes(q) ||
+                      (tpl.note && tpl.note.toLowerCase().includes(q))
+                    );
+                  }
+                  return true;
+                })
+                .map((tpl) => {
+                  const isIndirect = tpl.workloadPart === 'indirect';
+                  const alreadyInDept = isIndirect
+                    ? (currentDeptData.indirectItems || []).some(
+                        (i) => i.templateId === tpl.id || i.id === tpl.id || i.name === tpl.name
+                      )
+                    : (currentDeptData.supportItems || []).some(
+                        (i) => i.templateId === tpl.id || i.id === tpl.id || i.name === tpl.name
+                      );
+
+                  return (
+                    <div
+                      key={tpl.id}
+                      className="p-3 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-850 hover:border-slate-300 dark:hover:border-slate-700 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 transition-all shadow-2xs"
+                    >
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span
+                            className={`text-[10px] px-2 py-0.5 rounded-full font-bold border ${
+                              isIndirect
+                                ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/60 dark:text-blue-300 border-blue-200 dark:border-blue-700'
+                                : 'bg-purple-100 text-purple-800 dark:bg-purple-900/60 dark:text-purple-300 border-purple-200 dark:border-purple-700'
+                            }`}
+                          >
+                            {isIndirect ? 'งานรอง (ส่วน 2)' : 'งานสนับสนุน (ส่วน 3)'}
+                          </span>
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium">
+                            {tpl.department === 'ALL' ? 'ทุกฝ่ายงาน (ALL)' : tpl.department}
+                          </span>
+                          <span className="text-[10px] text-slate-500 dark:text-slate-400">
+                            {isIndirect
+                              ? `${tpl.unitTimeMinutes} นาที/${tpl.unitLabel || 'ราย'}`
+                              : `${tpl.unitTimeMinutes} นาที/ครั้ง (${tpl.frequencyType === 'daily' ? 'ทุกวัน' : tpl.frequencyType === 'weekly' ? 'ต่อสัปดาห์' : tpl.frequencyType === 'monthly' ? 'ต่อเดือน' : 'ตามจริง'})`}
+                          </span>
+                        </div>
+                        <p className="font-bold text-xs text-slate-900 dark:text-white">
+                          {tpl.name}
+                        </p>
+                        {tpl.note && (
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                            {tpl.note}
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        {alreadyInDept ? (
+                          <span className="px-3 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 font-bold text-xs flex items-center gap-1.5 border border-emerald-200 dark:border-emerald-800">
+                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                            <span>อยู่ในเวรนี้แล้ว</span>
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (isIndirect) {
+                                const newItem: IndirectCareItem = {
+                                  id: tpl.id,
+                                  templateId: tpl.id,
+                                  name: tpl.name,
+                                  category: (tpl.category as any) || 'custom',
+                                  count: 0,
+                                  unitTimeMinutes: tpl.unitTimeMinutes,
+                                  unitLabel: tpl.unitLabel || 'ราย',
+                                  note: tpl.note || '',
+                                };
+                                setIndirectItemsForActiveDept([...(currentDeptData.indirectItems || []), newItem]);
+                              } else {
+                                const newItem: SupportWorkItem = {
+                                  id: tpl.id,
+                                  templateId: tpl.id,
+                                  name: tpl.name,
+                                  category: (tpl.category as any) || 'custom',
+                                  frequencyType: tpl.frequencyType || 'daily',
+                                  frequencyCount: tpl.defaultFrequencyCount || 1,
+                                  timeMinutesPerSession: tpl.unitTimeMinutes,
+                                  note: tpl.note || '',
+                                };
+                                setSupportItemsForActiveDept([...(currentDeptData.supportItems || []), newItem]);
+                              }
+                            }}
+                            className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs flex items-center gap-1.5 shadow-sm transition-all active:scale-95 cursor-pointer"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                            <span>+ นำเข้าสู่เวรนี้</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+
+              {activityTemplates.length === 0 && (
+                <div className="py-12 text-center text-slate-400">
+                  <Database className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                  <p className="font-semibold text-xs">ยังไม่มีแม่แบบในฐานข้อมูล</p>
+                  <p className="text-[11px] mt-1">
+                    คุณสามารถกดปุ่ม "เพิ่มประเภทงานรอง" หรือ "เพิ่มประเภทงานสนับสนุน" ในแบบฟอร์มเพื่อบันทึกประเภทใหม่ลงในฐานข้อมูล
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="p-3.5 sm:p-4 border-t border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-850 flex items-center justify-between">
+              <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                แม่แบบที่เพิ่มจะเชื่อมโยงกับฐานข้อมูล Supabase PostgreSQL และบันทึกของทุกวัน
+              </span>
               <button
                 type="button"
-                onClick={handleSaveSupportItem}
-                disabled={!editingSupportItem.item.name.trim()}
-                className="px-4 py-1.5 rounded-xl font-bold bg-purple-600 hover:bg-purple-500 text-white shadow-sm disabled:opacity-50"
+                onClick={() => setIsCatalogModalOpen(false)}
+                className="px-4 py-1.5 rounded-xl bg-slate-200 dark:bg-slate-700 hover:bg-slate-300 dark:hover:bg-slate-600 text-slate-800 dark:text-slate-200 font-bold text-xs transition-colors cursor-pointer"
               >
-                บันทึกรายการ
+                ปิดหน้าต่าง
               </button>
             </div>
           </div>
