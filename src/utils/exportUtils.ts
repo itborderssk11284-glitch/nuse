@@ -13,9 +13,40 @@ import { calculateHospitalOverall } from './calculator';
 export function exportToExcel(
   records: DailyRecord[],
   config: StandardWeightsConfig,
-  reportPeriodName = 'รายงานค่างานและอัตรากำลังพยาบาล_รพ.สังขละบุรี'
+  reportPeriodName = 'รายงานค่างานและอัตรากำลังพยาบาล_รพ.สังขละบุรี',
+  departmentFilter = 'all'
 ) {
   const wb = XLSX.utils.book_new();
+
+  // If specific department is chosen, put its dedicated sheet first!
+  if (departmentFilter && departmentFilter !== 'all') {
+    const deptKey = departmentFilter as 'ER' | 'OPD' | 'IPD1' | 'IPD2' | 'LR';
+    const deptRows = records.map((rec) => {
+      const calc = calculateHospitalOverall(rec, config);
+      const d = calc.departments[deptKey];
+      return {
+        'วันที่': rec.date,
+        'แผนก': d.departmentName,
+        'พยาบาลผู้บันทึก': rec.recorderName || '-',
+        'งานหลัก Direct Care (ชม.)': d.directCareHours,
+        'งานรอง Indirect Care (ชม.)': d.indirectCareHours,
+        'งานสนับสนุน Support (ชม.)': d.supportCareHours,
+        'ค่างานรวม TNH (ชม.)': d.totalNursingHours,
+        'พยาบาลปฏิบัติงานจริง (คน)': d.totalActualStaff,
+        'พยาบาลที่ควรมี (คน)': d.totalRequiredStaff,
+        'เวรเช้า (จริง/ควรมี)': `${d.actualStaffPerShift.morning}/${d.requiredStaffPerShift.morning}`,
+        'เวรบ่าย (จริง/ควรมี)': `${d.actualStaffPerShift.afternoon}/${d.requiredStaffPerShift.afternoon}`,
+        'เวรดึก (จริง/ควรมี)': `${d.actualStaffPerShift.night}/${d.requiredStaffPerShift.night}`,
+        'ส่วนต่างกำลังคน (Gap)': d.staffingGap,
+        'อัตราผลิตภาพ (%)': `${d.productivityRate}%`,
+        'สถานะกำลังคน': d.status === 'balanced' ? 'พอเหมาะ' : d.status === 'understaffed' ? 'ขาดแคลน' : 'เกินเกณฑ์',
+        'ระดับภาระงาน': d.workloadLevel,
+      };
+    });
+
+    const wsDeptSpecific = XLSX.utils.json_to_sheet(deptRows);
+    XLSX.utils.book_append_sheet(wb, wsDeptSpecific, `รายงานแผนก ${deptKey}`);
+  }
 
   // 1. Summary Sheet with 3-Part Care Breakdown
   const summaryRows = records.map((rec) => {

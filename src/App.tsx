@@ -221,12 +221,15 @@ export default function App() {
     }
   }, [appUser]);
 
-  // Find or create current active record
+  // Find or create current active record (always merged with all active activity templates)
   const currentRecord = React.useMemo(() => {
     const found = records.find((r) => r.date === selectedDate);
-    if (found) return found;
-    return createNewDailyRecord(selectedDate, appUser?.name || '');
-  }, [records, selectedDate, appUser]);
+    if (found) {
+      return mergeRecordWithActivityTemplates(found, activityTemplates);
+    }
+    const fresh = createNewDailyRecord(selectedDate, appUser?.name || '');
+    return mergeRecordWithActivityTemplates(fresh, activityTemplates);
+  }, [records, selectedDate, appUser, activityTemplates]);
 
   // Save or update record (Local Storage + Supabase)
   const handleSaveRecord = async (updatedRecord: DailyRecord) => {
@@ -254,7 +257,7 @@ export default function App() {
     setTimeout(() => setToastMessage(null), 3000);
   };
 
-  // Add new date record (Local Storage + Supabase)
+  // Add new date record (Local Storage + Supabase) with all templates pre-linked
   const handleAddNewDateRecord = (dateStr: string) => {
     const existing = records.find((r) => r.date === dateStr);
     if (existing) {
@@ -262,14 +265,15 @@ export default function App() {
       return;
     }
     const newRec = createNewDailyRecord(dateStr, appUser?.name || '');
-    const updated = [newRec, ...records];
+    const merged = mergeRecordWithActivityTemplates(newRec, activityTemplates);
+    const updated = [merged, ...records];
     setRecords(updated);
     saveRecords(updated);
     if (isSupabaseConfigured()) {
-      saveRecordToSupabase(newRec);
+      saveRecordToSupabase(merged);
     }
     setSelectedDate(dateStr);
-    setToastMessage(`เพิ่มเวรวันที่ ${dateStr} เรียบร้อยแล้ว`);
+    setToastMessage(`เพิ่มเวรวันที่ ${dateStr} เรียบร้อยแล้ว (เชื่อมโยงงานรองและงานสนับสนุนครบถ้วน)`);
     setTimeout(() => setToastMessage(null), 3000);
   };
 
@@ -320,22 +324,23 @@ export default function App() {
 
   // Master Activity Templates (ส่วนที่ 2: งานรอง และ ส่วนที่ 3: งานสนับสนุน)
   const handleSaveActivityTemplate = async (template: ActivityTemplate, linkAllDates = true) => {
-    const { templates: updatedTemplates, updatedRecords } = addOrUpdateActivityTemplateAndLink(template, linkAllDates);
+    const { templates: updatedTemplates, updatedRecords } = addOrUpdateActivityTemplateAndLink(template, true);
     setActivityTemplates(updatedTemplates);
-    if (linkAllDates && updatedRecords.length > 0) {
-      setRecords(updatedRecords);
-      saveRecords(updatedRecords);
-    }
+
+    // Merge every recorded date in the system with the new/updated template
+    const currentRecs = loadRecords();
+    const sourceRecs = currentRecs.length > 0 ? currentRecs : records;
+    const allMerged = sourceRecs.map((r) => mergeRecordWithActivityTemplates(r, updatedTemplates));
+    setRecords(allMerged);
+    saveRecords(allMerged);
+
     if (isSupabaseConfigured()) {
       await saveActivityTemplatesToSupabase(updatedTemplates);
-      if (linkAllDates && updatedRecords.length > 0) {
-        // Asynchronously update daily records in Supabase
-        for (const rec of updatedRecords) {
-          saveRecordToSupabase(rec);
-        }
+      for (const rec of allMerged) {
+        saveRecordToSupabase(rec);
       }
     }
-    setToastMessage(`บันทึกประเภท "${template.name}" ไปยังฐานข้อมูลและเชื่อมโยงกับทุกวันที่บันทึก (${updatedRecords.length} วัน) สำเร็จ!`);
+    setToastMessage(`บันทึกประเภท "${template.name}" ไปยังฐานข้อมูลและเชื่อมโยงกับทุกวันที่บันทึก (${allMerged.length} วัน) สำเร็จ!`);
     setTimeout(() => setToastMessage(null), 3500);
   };
 

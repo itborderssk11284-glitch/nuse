@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { StandardWeightsConfig, ActivityTemplate, DepartmentKey } from '../types/nursing';
+import { StandardWeightsConfig } from '../types/nursing';
 import { DEFAULT_STANDARDS } from '../utils/calculator';
 import {
   X,
@@ -17,14 +17,6 @@ import {
   Copy,
   ExternalLink,
   AlertCircle,
-  Plus,
-  Search,
-  Edit2,
-  Link2,
-  Layers,
-  RotateCw,
-  ListFilter,
-  Check,
 } from 'lucide-react';
 import {
   isSupabaseConfigured,
@@ -39,10 +31,6 @@ interface SettingsModalProps {
   onSaveStandards: (newConfig: StandardWeightsConfig) => void;
   onResetStandards: () => void;
   onClearAllRecords?: () => void;
-  activityTemplates?: ActivityTemplate[];
-  onSaveActivityTemplate?: (template: ActivityTemplate, linkAllDates?: boolean) => Promise<void>;
-  onDeleteActivityTemplate?: (templateId: string, removeFromAllDates?: boolean) => Promise<void>;
-  onSyncAllDatesWithTemplates?: () => Promise<void>;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -52,12 +40,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onSaveStandards,
   onResetStandards,
   onClearAllRecords,
-  activityTemplates = [],
-  onSaveActivityTemplate,
-  onDeleteActivityTemplate,
-  onSyncAllDatesWithTemplates,
 }) => {
-  const [activeTab, setActiveTab] = useState<'weights' | 'templates' | 'database'>('weights');
+  const [activeTab, setActiveTab] = useState<'weights' | 'database'>('weights');
   const [cfg, setCfg] = useState<StandardWeightsConfig>(JSON.parse(JSON.stringify(standardsConfig)));
   const [savedToast, setSavedToast] = useState(false);
   const [toastText, setToastText] = useState('บันทึกการตั้งค่าเกณฑ์มาตรฐานเรียบร้อยแล้ว');
@@ -65,25 +49,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const [supabaseStatus, setSupabaseStatus] = useState<{ success: boolean; message: string } | null>(null);
   const [syncingSupabase, setSyncingSupabase] = useState(false);
   const [copySchemaSuccess, setCopySchemaSuccess] = useState(false);
-
-  // Activity Templates Tab states
-  const [tplSearch, setTplSearch] = useState('');
-  const [tplPartFilter, setTplPartFilter] = useState<'all' | 'indirect' | 'support'>('all');
-  const [tplDeptFilter, setTplDeptFilter] = useState<'all' | DepartmentKey | 'ALL'>('all');
-  const [syncingTemplates, setSyncingTemplates] = useState(false);
-  const [isEditingTemplate, setIsEditingTemplate] = useState<ActivityTemplate | null>(null);
-  const [isAddingTemplate, setIsAddingTemplate] = useState(false);
-
-  // New Template form state
-  const [formPart, setFormPart] = useState<'indirect' | 'support'>('indirect');
-  const [formName, setFormName] = useState('');
-  const [formDept, setFormDept] = useState<DepartmentKey | 'ALL'>('ALL');
-  const [formUnitTime, setFormUnitTime] = useState(15);
-  const [formUnitLabel, setFormUnitLabel] = useState('ครั้ง');
-  const [formCategory, setFormCategory] = useState('custom');
-  const [formNote, setFormNote] = useState('');
-  const [formFreqType, setFormFreqType] = useState<'daily' | 'weekly' | 'monthly' | 'custom'>('daily');
-  const [formFreqCount, setFormFreqCount] = useState(1);
 
   const supabaseReady = isSupabaseConfigured();
 
@@ -248,85 +213,9 @@ CREATE POLICY "Allow public all hospital_users" ON public.hospital_users FOR ALL
     reader.readAsText(file);
   };
 
-  const handleSaveTemplateSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!formName.trim()) {
-      alert('กรุณาระบุชื่อประเภทงาน');
-      return;
-    }
-    const templateData: ActivityTemplate = {
-      id: isEditingTemplate ? isEditingTemplate.id : `tpl-${formPart}-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-      workloadPart: formPart,
-      name: formName.trim(),
-      department: formDept,
-      unitTimeMinutes: formUnitTime,
-      unitLabel: formUnitLabel.trim() || (formPart === 'support' ? 'ครั้ง' : 'ราย'),
-      category: formCategory,
-      frequencyType: formFreqType,
-      defaultFrequencyCount: formFreqCount,
-      note: formNote.trim(),
-      isActive: true,
-      isSystemDefault: isEditingTemplate?.isSystemDefault ?? false,
-    };
-
-    if (onSaveActivityTemplate) {
-      await onSaveActivityTemplate(templateData, true);
-    }
-    setIsAddingTemplate(false);
-    setIsEditingTemplate(null);
-    setToastText(`บันทึกประเภท "${templateData.name}" ลงฐานข้อมูลและเชื่อมโยงทุกวันสำเร็จ!`);
-    setSavedToast(true);
-    setTimeout(() => setSavedToast(false), 2500);
-  };
-
-  const handleStartEditTemplate = (tpl: ActivityTemplate) => {
-    setIsEditingTemplate(tpl);
-    setIsAddingTemplate(true);
-    setFormPart(tpl.workloadPart);
-    setFormName(tpl.name);
-    setFormDept(tpl.department);
-    setFormUnitTime(tpl.unitTimeMinutes);
-    setFormUnitLabel(tpl.unitLabel || 'ครั้ง');
-    setFormCategory(tpl.category);
-    setFormNote(tpl.note || '');
-    setFormFreqType(tpl.frequencyType || 'daily');
-    setFormFreqCount(tpl.defaultFrequencyCount || 1);
-  };
-
-  const handleDeleteTemplateClick = async (tpl: ActivityTemplate) => {
-    if (confirm(`คุณต้องการลบประเภทงาน "${tpl.name}" ออกจากฐานข้อมูลและทุกวันที่บันทึกไว้ในระบบใช่หรือไม่?`)) {
-      if (onDeleteActivityTemplate) {
-        await onDeleteActivityTemplate(tpl.id, true);
-      }
-      setToastText(`ลบประเภทงาน "${tpl.name}" ออกจากระบบและทุกวันเรียบร้อย`);
-      setSavedToast(true);
-      setTimeout(() => setSavedToast(false), 2500);
-    }
-  };
-
-  const handleReSyncTemplates = async () => {
-    if (onSyncAllDatesWithTemplates) {
-      setSyncingTemplates(true);
-      await onSyncAllDatesWithTemplates();
-      setSyncingTemplates(false);
-      setToastText('เชื่อมโยงและซิงค์ประเภทงานจากฐานข้อมูลกับทุกวันที่บันทึกเรียบร้อย');
-      setSavedToast(true);
-      setTimeout(() => setSavedToast(false), 2500);
-    }
-  };
-
-  const filteredTemplates = activityTemplates.filter((t) => {
-    const matchSearch =
-      t.name.toLowerCase().includes(tplSearch.toLowerCase()) ||
-      (t.note && t.note.toLowerCase().includes(tplSearch.toLowerCase()));
-    const matchPart = tplPartFilter === 'all' || t.workloadPart === tplPartFilter;
-    const matchDept = tplDeptFilter === 'all' || t.department === tplDeptFilter || t.department === 'ALL';
-    return matchSearch && matchPart && matchDept;
-  });
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-xs animate-in fade-in">
-      <div className="relative w-full max-w-4xl bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden max-h-[92vh] flex flex-col">
+      <div className="relative w-full max-w-2xl bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden max-h-[92vh] flex flex-col">
         
         {/* Header */}
         <div className="px-5 py-3.5 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between bg-slate-900 text-white">
@@ -336,12 +225,12 @@ CREATE POLICY "Allow public all hospital_users" ON public.hospital_users FOR ALL
             </div>
             <div>
               <h3 className="font-bold text-sm sm:text-base flex items-center gap-2">
-                <span>การตั้งค่าระบบและคลังประเภทงาน</span>
+                <span>การตั้งค่าระบบ (System Settings)</span>
                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-semibold border border-emerald-500/30">
                   รพ.สังขละบุรี
                 </span>
               </h3>
-              <p className="text-[11px] text-slate-400">กำหนดเกณฑ์เวลามาตรฐาน, คลังประเภทงานรอง/งานสนับสนุน, และฐานข้อมูล</p>
+              <p className="text-[11px] text-slate-400">กำหนดเกณฑ์เวลามาตรฐานสภาการพยาบาล และการจัดการฐานข้อมูล</p>
             </div>
           </div>
           <button
@@ -353,11 +242,11 @@ CREATE POLICY "Allow public all hospital_users" ON public.hospital_users FOR ALL
         </div>
 
         {/* Tab Navigation */}
-        <div className="flex items-center gap-1 px-4 pt-2.5 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60 overflow-x-auto">
+        <div className="flex items-center gap-1 px-4 pt-2.5 border-b border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60">
           <button
             type="button"
             onClick={() => setActiveTab('weights')}
-            className={`px-3.5 py-2 text-xs font-bold rounded-t-xl transition-all flex items-center gap-1.5 border-b-2 cursor-pointer whitespace-nowrap ${
+            className={`px-3.5 py-2 text-xs font-bold rounded-t-xl transition-all flex items-center gap-1.5 border-b-2 cursor-pointer ${
               activeTab === 'weights'
                 ? 'bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-400 border-emerald-600 shadow-2xs'
                 : 'text-slate-600 dark:text-slate-400 border-transparent hover:text-slate-900 dark:hover:text-white'
@@ -369,31 +258,15 @@ CREATE POLICY "Allow public all hospital_users" ON public.hospital_users FOR ALL
 
           <button
             type="button"
-            onClick={() => setActiveTab('templates')}
-            className={`px-3.5 py-2 text-xs font-bold rounded-t-xl transition-all flex items-center gap-1.5 border-b-2 cursor-pointer whitespace-nowrap ${
-              activeTab === 'templates'
-                ? 'bg-white dark:bg-slate-900 text-blue-700 dark:text-blue-400 border-blue-600 shadow-2xs'
-                : 'text-slate-600 dark:text-slate-400 border-transparent hover:text-slate-900 dark:hover:text-white'
-            }`}
-          >
-            <Layers className="w-3.5 h-3.5" />
-            <span>คลังประเภทงานรอง & สนับสนุน (ส่วนที่ 2 & 3)</span>
-            <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-blue-100 dark:bg-blue-950 text-blue-800 dark:text-blue-300 font-black">
-              {activityTemplates.length}
-            </span>
-          </button>
-
-          <button
-            type="button"
             onClick={() => setActiveTab('database')}
-            className={`px-3.5 py-2 text-xs font-bold rounded-t-xl transition-all flex items-center gap-1.5 border-b-2 cursor-pointer whitespace-nowrap ${
+            className={`px-3.5 py-2 text-xs font-bold rounded-t-xl transition-all flex items-center gap-1.5 border-b-2 cursor-pointer ${
               activeTab === 'database'
-                ? 'bg-white dark:bg-slate-900 text-purple-700 dark:text-purple-400 border-purple-600 shadow-2xs'
+                ? 'bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-400 border-emerald-600 shadow-2xs'
                 : 'text-slate-600 dark:text-slate-400 border-transparent hover:text-slate-900 dark:hover:text-white'
             }`}
           >
-            <Cloud className="w-3.5 h-3.5" />
-            <span>ฐานข้อมูล Supabase & สำรองข้อมูล</span>
+            <Database className="w-3.5 h-3.5" />
+            <span>ฐานข้อมูล & สำรองข้อมูล (Database & Cloud)</span>
           </button>
         </div>
 
@@ -586,395 +459,8 @@ CREATE POLICY "Allow public all hospital_users" ON public.hospital_users FOR ALL
         </form>
       )}
 
-      {/* Tab 2: Activity Templates Catalog (ส่วนที่ 2 & ส่วนที่ 3) */}
-      {activeTab === 'templates' && (
-        <div className="p-4 sm:p-5 overflow-y-auto space-y-4 flex-1 text-xs">
-          {/* Banner info */}
-          <div className="p-3.5 rounded-2xl bg-gradient-to-r from-blue-50 via-indigo-50/60 to-purple-50 dark:from-blue-950/40 dark:via-indigo-950/30 dark:to-purple-950/40 border border-blue-200/80 dark:border-blue-800/60 shadow-2xs">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-              <div>
-                <div className="font-bold text-slate-800 dark:text-slate-100 flex items-center gap-2">
-                  <Database className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-                  <span>คลังประเภทงานรอง (ส่วนที่ 2) และงานสนับสนุน (ส่วนที่ 3)</span>
-                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 dark:bg-blue-900/60 dark:text-blue-300 font-semibold border border-blue-200 dark:border-blue-800">
-                    Cloud Sync & Auto-Link
-                  </span>
-                </div>
-                <p className="text-[11px] text-slate-600 dark:text-slate-300 mt-1 leading-snug">
-                  ประเภทงานที่เพิ่มหรือแก้ไขในคลังนี้ จะบันทึกลงในฐานข้อมูล <strong>Supabase (Cloud)</strong> และเชื่อมโยงกับทุกวันที่บันทึกในระบบ เพื่อให้พยาบาลทุกเวรทุกวันสามารถกรอกข้อมูลได้ทันที
-                </p>
-              </div>
+      {/* Tab 2: Database & Backup */}
 
-              <div className="flex items-center gap-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={handleReSyncTemplates}
-                  disabled={syncingTemplates}
-                  className="px-3 py-1.5 rounded-xl bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-300 dark:border-slate-600 font-semibold flex items-center gap-1.5 shadow-2xs transition-all cursor-pointer disabled:opacity-50"
-                  title="ซิงค์และเชื่อมโยงประเภทงานจากฐานข้อมูลเข้ากับทุกวันที่บันทึก"
-                >
-                  <RotateCw className={`w-3.5 h-3.5 text-blue-600 ${syncingTemplates ? 'animate-spin' : ''}`} />
-                  <span>{syncingTemplates ? 'กำลังเชื่อมโยง...' : 'เชื่อมโยงทุกวัน'}</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsEditingTemplate(null);
-                    setFormName('');
-                    setFormNote('');
-                    setFormUnitTime(15);
-                    setFormUnitLabel('ครั้ง');
-                    setIsAddingTemplate(true);
-                  }}
-                  className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold flex items-center gap-1.5 shadow-xs transition-all cursor-pointer"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>เพิ่มประเภทงานใหม่</span>
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Filter toolbar */}
-          <div className="flex flex-wrap items-center justify-between gap-2.5 p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700">
-            <div className="flex items-center gap-2 flex-1 min-w-[200px]">
-              <div className="relative flex-1">
-                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
-                <input
-                  type="text"
-                  placeholder="ค้นหาชื่อประเภทงาน หรือคำอธิบาย..."
-                  value={tplSearch}
-                  onChange={(e) => setTplSearch(e.target.value)}
-                  className="w-full pl-8 pr-3 py-1.5 text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-slate-100"
-                />
-              </div>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="flex items-center rounded-lg bg-slate-200 dark:bg-slate-700 p-0.5 text-[11px] font-semibold">
-                <button
-                  type="button"
-                  onClick={() => setTplPartFilter('all')}
-                  className={`px-2 py-1 rounded-md transition-all cursor-pointer ${
-                    tplPartFilter === 'all'
-                      ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-2xs'
-                      : 'text-slate-600 dark:text-slate-300'
-                  }`}
-                >
-                  ทั้งหมด ({activityTemplates.length})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setTplPartFilter('indirect')}
-                  className={`px-2 py-1 rounded-md transition-all cursor-pointer ${
-                    tplPartFilter === 'indirect'
-                      ? 'bg-blue-600 text-white shadow-2xs'
-                      : 'text-slate-600 dark:text-slate-300'
-                  }`}
-                >
-                  ส่วนที่ 2: งานรอง ({activityTemplates.filter((t) => t.workloadPart === 'indirect').length})
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setTplPartFilter('support')}
-                  className={`px-2 py-1 rounded-md transition-all cursor-pointer ${
-                    tplPartFilter === 'support'
-                      ? 'bg-purple-600 text-white shadow-2xs'
-                      : 'text-slate-600 dark:text-slate-300'
-                  }`}
-                >
-                  ส่วนที่ 3: งานสนับสนุน ({activityTemplates.filter((t) => t.workloadPart === 'support').length})
-                </button>
-              </div>
-
-              <select
-                value={tplDeptFilter}
-                onChange={(e) => setTplDeptFilter(e.target.value as any)}
-                className="px-2.5 py-1 text-xs bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg font-medium text-slate-700 dark:text-slate-200"
-              >
-                <option value="all">ทุกฝ่ายงาน</option>
-                <option value="ALL">ใช้ได้ทุกฝ่าย (ALL)</option>
-                <option value="ER">ห้องฉุกเฉิน (ER)</option>
-                <option value="OPD">ผู้ป่วยนอก (OPD)</option>
-                <option value="IPD1">ผู้ป่วยใน 1 (IPD1)</option>
-                <option value="IPD2">ผู้ป่วยใน 2 (IPD2)</option>
-                <option value="LR">ห้องคลอด (LR)</option>
-              </select>
-            </div>
-          </div>
-
-          {/* Inline Add / Edit Panel */}
-          {isAddingTemplate && (
-            <form
-              onSubmit={handleSaveTemplateSubmit}
-              className="p-4 rounded-2xl bg-white dark:bg-slate-900 border-2 border-blue-400 dark:border-blue-600 shadow-md space-y-3 animate-in fade-in zoom-in-95"
-            >
-              <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
-                <div className="font-bold text-xs sm:text-sm text-slate-800 dark:text-slate-100 flex items-center gap-1.5">
-                  {isEditingTemplate ? <Edit2 className="w-4 h-4 text-amber-500" /> : <Plus className="w-4 h-4 text-blue-600" />}
-                  <span>{isEditingTemplate ? `แก้ไขประเภทงาน "${isEditingTemplate.name}"` : 'เพิ่มประเภทงานใหม่ลงฐานข้อมูลกลาง'}</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsAddingTemplate(false);
-                    setIsEditingTemplate(null);
-                  }}
-                  className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="font-semibold text-slate-700 dark:text-slate-300 block mb-1">
-                    ส่วนงาน (Workload Part) *
-                  </label>
-                  <select
-                    value={formPart}
-                    onChange={(e) => setFormPart(e.target.value as 'indirect' | 'support')}
-                    className="w-full p-2 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 font-semibold"
-                  >
-                    <option value="indirect">ส่วนที่ 2: งานรอง (Indirect Nursing Care)</option>
-                    <option value="support">ส่วนที่ 3: งานสนับสนุน (Support Work / Ward Management)</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="font-semibold text-slate-700 dark:text-slate-300 block mb-1">
-                    ขอบเขตฝ่ายงานที่ใช้งานได้ *
-                  </label>
-                  <select
-                    value={formDept}
-                    onChange={(e) => setFormDept(e.target.value as any)}
-                    className="w-full p-2 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 font-semibold"
-                  >
-                    <option value="ALL">ใช้ได้ทุกฝ่ายงาน (ER, OPD, IPD1, IPD2, LR)</option>
-                    <option value="ER">เฉพาะห้องฉุกเฉิน (ER)</option>
-                    <option value="OPD">เฉพาะผู้ป่วยนอก (OPD)</option>
-                    <option value="IPD1">เฉพาะผู้ป่วยใน 1 (IPD1)</option>
-                    <option value="IPD2">เฉพาะผู้ป่วยใน 2 (IPD2)</option>
-                    <option value="LR">เฉพาะห้องคลอด (LR)</option>
-                  </select>
-                </div>
-
-                <div className="sm:col-span-2">
-                  <label className="font-semibold text-slate-700 dark:text-slate-300 block mb-1">
-                    ชื่อประเภทกิจกรรม / ชื่องาน *
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="เช่น เตรียมชุดหัตถการพิเศษ, ตรวจนับคลังสารน้ำประจำสัปดาห์, IC Surveillance"
-                    value={formName}
-                    onChange={(e) => setFormName(e.target.value)}
-                    className="w-full p-2 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 font-bold"
-                  />
-                </div>
-
-                <div>
-                  <label className="font-semibold text-slate-700 dark:text-slate-300 block mb-1">
-                    เวลามาตรฐานต่อหน่วย/ครั้ง (นาที) *
-                  </label>
-                  <input
-                    type="number"
-                    min="1"
-                    required
-                    value={formUnitTime}
-                    onChange={(e) => setFormUnitTime(Math.max(1, parseInt(e.target.value) || 1))}
-                    className="w-full p-2 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 font-mono font-bold text-blue-600"
-                  />
-                </div>
-
-                <div>
-                  <label className="font-semibold text-slate-700 dark:text-slate-300 block mb-1">
-                    หน่วยนับปริมาณงาน
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="เช่น ราย, ครั้ง, เคส, กะ, เวร"
-                    value={formUnitLabel}
-                    onChange={(e) => setFormUnitLabel(e.target.value)}
-                    className="w-full p-2 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 font-medium"
-                  />
-                </div>
-
-                {formPart === 'support' && (
-                  <>
-                    <div>
-                      <label className="font-semibold text-slate-700 dark:text-slate-300 block mb-1">
-                        รอบความถี่การปฏิบัติ
-                      </label>
-                      <select
-                        value={formFreqType}
-                        onChange={(e) => setFormFreqType(e.target.value as any)}
-                        className="w-full p-2 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 font-semibold"
-                      >
-                        <option value="daily">รายวัน (Daily)</option>
-                        <option value="weekly">รายสัปดาห์ (Weekly)</option>
-                        <option value="monthly">รายเดือน (Monthly)</option>
-                        <option value="custom">ตามรอบเฉพาะกิจ</option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="font-semibold text-slate-700 dark:text-slate-300 block mb-1">
-                        จำนวนครั้งมาตรฐานตามรอบ
-                      </label>
-                      <input
-                        type="number"
-                        min="1"
-                        value={formFreqCount}
-                        onChange={(e) => setFormFreqCount(Math.max(1, parseInt(e.target.value) || 1))}
-                        className="w-full p-2 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-600 font-mono font-bold"
-                      />
-                    </div>
-                  </>
-                )}
-
-                <div className="sm:col-span-2">
-                  <label className="font-semibold text-slate-700 dark:text-slate-300 block mb-1">
-                    คำอธิบาย / รายละเอียดกิจกรรม
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="เช่น ขั้นตอนและขอบเขตงาน เพื่อให้ทุกเวรปฏิบัติเป็นแนวทางเดียวกัน"
-                    value={formNote}
-                    onChange={(e) => setFormNote(e.target.value)}
-                    className="w-full p-2 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-600"
-                  />
-                </div>
-              </div>
-
-              <div className="p-2.5 rounded-xl bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 flex items-center gap-2 text-[11px] text-blue-800 dark:text-blue-300">
-                <Check className="w-4 h-4 shrink-0 text-blue-600" />
-                <span>
-                  เมื่อคลิกบันทึก ระบบจะบันทึกลง <strong>Supabase PostgreSQL</strong> และเชื่อมโยง (Link) เข้าสู่ทุกวันที่บันทึกไว้ในระบบทันที
-                </span>
-              </div>
-
-              <div className="flex items-center justify-end gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsAddingTemplate(false);
-                    setIsEditingTemplate(null);
-                  }}
-                  className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
-                >
-                  ยกเลิก
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold flex items-center gap-1.5 shadow-xs cursor-pointer"
-                >
-                  <Save className="w-4 h-4" />
-                  <span>บันทึกลงฐานข้อมูลและเชื่อมโยงทุกวัน</span>
-                </button>
-              </div>
-            </form>
-          )}
-
-          {/* Templates Table */}
-          <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 shadow-2xs">
-            <table className="w-full text-left border-collapse text-xs min-w-[720px]">
-              <thead>
-                <tr className="bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-700 text-[11px] font-bold text-slate-600 dark:text-slate-300">
-                  <th className="py-2.5 px-3 w-10 text-center">#</th>
-                  <th className="py-2.5 px-3">ประเภทกิจกรรม</th>
-                  <th className="py-2.5 px-3 text-center w-28">ส่วนงาน</th>
-                  <th className="py-2.5 px-3 text-center w-28">ฝ่ายงาน</th>
-                  <th className="py-2.5 px-3 text-center w-28">เวลามาตรฐาน</th>
-                  <th className="py-2.5 px-3 text-center w-24">ฐานข้อมูล</th>
-                  <th className="py-2.5 px-3 text-center w-20">จัดการ</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                {filteredTemplates.length === 0 ? (
-                  <tr>
-                    <td colSpan={7} className="py-8 text-center text-slate-400">
-                      ไม่พบประเภทงานที่ค้นหา
-                    </td>
-                  </tr>
-                ) : (
-                  filteredTemplates.map((tpl, idx) => {
-                    const isIndirect = tpl.workloadPart === 'indirect';
-                    return (
-                      <tr
-                        key={tpl.id}
-                        className="hover:bg-slate-50/60 dark:hover:bg-slate-800/40 transition-colors"
-                      >
-                        <td className="py-2 px-3 text-center font-mono text-slate-400 text-[11px]">
-                          {idx + 1}
-                        </td>
-                        <td className="py-2 px-3">
-                          <div className="font-bold text-slate-800 dark:text-slate-100">
-                            {tpl.name}
-                          </div>
-                          {tpl.note && (
-                            <div className="text-[11px] text-slate-400 mt-0.5 line-clamp-1">
-                              {tpl.note}
-                            </div>
-                          )}
-                        </td>
-                        <td className="py-2 px-3 text-center">
-                          <span
-                            className={`inline-block text-[10px] px-2 py-0.5 rounded-full font-semibold ${
-                              isIndirect
-                                ? 'bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300 border border-blue-200 dark:border-blue-800'
-                                : 'bg-purple-100 text-purple-800 dark:bg-purple-950 dark:text-purple-300 border border-purple-200 dark:border-purple-800'
-                            }`}
-                          >
-                            {isIndirect ? 'ส่วนที่ 2: งานรอง' : 'ส่วนที่ 3: งานสนับสนุน'}
-                          </span>
-                        </td>
-                        <td className="py-2 px-3 text-center">
-                          <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
-                            {tpl.department}
-                          </span>
-                        </td>
-                        <td className="py-2 px-3 text-center font-mono font-bold text-blue-600 dark:text-blue-400">
-                          {tpl.unitTimeMinutes} นาที/{tpl.unitLabel || 'ครั้ง'}
-                        </td>
-                        <td className="py-2 px-3 text-center">
-                          <span className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 font-semibold border border-emerald-200 dark:border-emerald-800">
-                            <Cloud className="w-3 h-3 text-emerald-600" />
-                            <span>เชื่อมทุกวัน</span>
-                          </span>
-                        </td>
-                        <td className="py-2 px-3 text-center">
-                          <div className="flex items-center justify-center gap-1">
-                            <button
-                              type="button"
-                              onClick={() => handleStartEditTemplate(tpl)}
-                              title="แก้ไขประเภทงานนี้"
-                              className="p-1 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950 transition-colors cursor-pointer"
-                            >
-                              <Edit2 className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteTemplateClick(tpl)}
-                              title="ลบประเภทงานนี้ออกจากฐานข้อมูลและทุกวัน"
-                              className="p-1 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950 transition-colors cursor-pointer"
-                            >
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {/* Tab 3: Database & Backup */}
       {activeTab === 'database' && (
         <div className="p-5 overflow-y-auto space-y-4 flex-1 text-xs">
           {/* Supabase Cloud PostgreSQL Database Section */}

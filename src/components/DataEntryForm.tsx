@@ -378,7 +378,7 @@ export const DataEntryForm: React.FC<DataEntryFormProps> = ({
     if (!modal.name.trim()) return;
 
     if (modal.part === 'indirect') {
-      const templateId = modal.templateId || (modal.linkToDatabase ? `tpl-ind-${Date.now()}` : undefined);
+      const templateId = modal.templateId || `tpl-ind-${Date.now()}`;
       const newItem: IndirectCareItem = {
         id: modal.id || templateId || `ind-${Date.now()}`,
         templateId,
@@ -390,31 +390,67 @@ export const DataEntryForm: React.FC<DataEntryFormProps> = ({
         note: modal.note.trim(),
       };
 
-      const currentList = currentDeptData.indirectItems || [];
-      let updatedList: IndirectCareItem[];
-      if (modal.isNew) {
-        updatedList = [...currentList, newItem];
+      if (modal.departmentScope === 'ALL') {
+        const depts: ('er' | 'opd' | 'ipd1' | 'ipd2' | 'lr')[] = ['er', 'opd', 'ipd1', 'ipd2', 'lr'];
+        setFormData((prev) => {
+          const next = { ...prev };
+          depts.forEach((d) => {
+            const curDept = next[d];
+            const curList = curDept.indirectItems || [];
+            const exists = curList.find((i) => i.id === newItem.id || i.templateId === templateId || i.name === newItem.name);
+            if (exists) {
+              (next as any)[d] = {
+                ...curDept,
+                indirectItems: curList.map((i) => (i.id === exists.id ? { ...newItem, id: i.id, count: i.count } : i)),
+              };
+            } else {
+              (next as any)[d] = {
+                ...curDept,
+                indirectItems: [...curList, d === activeDept.toLowerCase() ? newItem : { ...newItem, id: `${d}-${templateId}`, count: 0 }],
+              };
+            }
+          });
+          return next;
+        });
       } else {
-        updatedList = currentList.map((i) => (i.id === modal.id ? { ...newItem, count: i.count } : i));
+        const targetDeptKey = modal.departmentScope.toLowerCase() as 'er' | 'opd' | 'ipd1' | 'ipd2' | 'lr';
+        setFormData((prev) => {
+          const next = { ...prev };
+          const curDept = next[targetDeptKey];
+          const curList = curDept.indirectItems || [];
+          const exists = curList.find((i) => i.id === newItem.id || i.templateId === templateId || i.name === newItem.name);
+          if (exists) {
+            (next as any)[targetDeptKey] = {
+              ...curDept,
+              indirectItems: curList.map((i) => (i.id === exists.id ? { ...newItem, id: i.id, count: i.count } : i)),
+            };
+          } else {
+            (next as any)[targetDeptKey] = {
+              ...curDept,
+              indirectItems: [...curList, newItem],
+            };
+          }
+          return next;
+        });
       }
-      setIndirectItemsForActiveDept(updatedList);
 
-      if (modal.linkToDatabase && onSaveActivityTemplate && templateId) {
-        const template: ActivityTemplate = {
-          id: templateId,
-          department: modal.departmentScope,
-          workloadPart: 'indirect',
-          name: modal.name.trim(),
-          category: modal.category,
-          unitTimeMinutes: Number(modal.unitTimeMinutes) || 1,
-          unitLabel: modal.unitLabel || 'ราย',
-          note: modal.note.trim(),
-          isActive: true,
-        };
+      const template: ActivityTemplate = {
+        id: templateId,
+        department: modal.departmentScope,
+        workloadPart: 'indirect',
+        name: modal.name.trim(),
+        category: modal.category,
+        unitTimeMinutes: Number(modal.unitTimeMinutes) || 1,
+        unitLabel: modal.unitLabel || 'ราย',
+        note: modal.note.trim(),
+        isActive: true,
+      };
+
+      if (onSaveActivityTemplate) {
         await onSaveActivityTemplate(template, true);
       }
     } else {
-      const templateId = modal.templateId || (modal.linkToDatabase ? `tpl-sup-${Date.now()}` : undefined);
+      const templateId = modal.templateId || `tpl-sup-${Date.now()}`;
       const newItem: SupportWorkItem = {
         id: modal.id || templateId || `sup-${Date.now()}`,
         templateId,
@@ -426,29 +462,65 @@ export const DataEntryForm: React.FC<DataEntryFormProps> = ({
         note: modal.note.trim(),
       };
 
-      const currentList = currentDeptData.supportItems || [];
-      let updatedList: SupportWorkItem[];
-      if (modal.isNew) {
-        updatedList = [...currentList, newItem];
+      if (modal.departmentScope === 'ALL') {
+        const depts: ('er' | 'opd' | 'ipd1' | 'ipd2' | 'lr')[] = ['er', 'opd', 'ipd1', 'ipd2', 'lr'];
+        setFormData((prev) => {
+          const next = { ...prev };
+          depts.forEach((d) => {
+            const curDept = next[d];
+            const curList = curDept.supportItems || [];
+            const exists = curList.find((i) => i.id === newItem.id || i.templateId === templateId || i.name === newItem.name);
+            if (exists) {
+              (next as any)[d] = {
+                ...curDept,
+                supportItems: curList.map((i) => (i.id === exists.id ? { ...newItem, id: i.id, frequencyCount: i.frequencyCount } : i)),
+              };
+            } else {
+              (next as any)[d] = {
+                ...curDept,
+                supportItems: [...curList, d === activeDept.toLowerCase() ? newItem : { ...newItem, id: `${d}-${templateId}` }],
+              };
+            }
+          });
+          return next;
+        });
       } else {
-        updatedList = currentList.map((i) => (i.id === modal.id ? { ...newItem, frequencyCount: i.frequencyCount } : i));
+        const targetDeptKey = modal.departmentScope.toLowerCase() as 'er' | 'opd' | 'ipd1' | 'ipd2' | 'lr';
+        setFormData((prev) => {
+          const next = { ...prev };
+          const curDept = next[targetDeptKey];
+          const curList = curDept.supportItems || [];
+          const exists = curList.find((i) => i.id === newItem.id || i.templateId === templateId || i.name === newItem.name);
+          if (exists) {
+            (next as any)[targetDeptKey] = {
+              ...curDept,
+              supportItems: curList.map((i) => (i.id === exists.id ? { ...newItem, id: i.id, frequencyCount: i.frequencyCount } : i)),
+            };
+          } else {
+            (next as any)[targetDeptKey] = {
+              ...curDept,
+              supportItems: [...curList, newItem],
+            };
+          }
+          return next;
+        });
       }
-      setSupportItemsForActiveDept(updatedList);
 
-      if (modal.linkToDatabase && onSaveActivityTemplate && templateId) {
-        const template: ActivityTemplate = {
-          id: templateId,
-          department: modal.departmentScope,
-          workloadPart: 'support',
-          name: modal.name.trim(),
-          category: modal.category,
-          unitTimeMinutes: Number(modal.unitTimeMinutes) || 1,
-          unitLabel: 'วัน',
-          frequencyType: modal.frequencyType,
-          defaultFrequencyCount: Number(modal.frequencyCount) || 1,
-          note: modal.note.trim(),
-          isActive: true,
-        };
+      const template: ActivityTemplate = {
+        id: templateId,
+        department: modal.departmentScope,
+        workloadPart: 'support',
+        name: modal.name.trim(),
+        category: modal.category,
+        unitTimeMinutes: Number(modal.unitTimeMinutes) || 1,
+        unitLabel: 'วัน',
+        frequencyType: modal.frequencyType,
+        defaultFrequencyCount: Number(modal.frequencyCount) || 1,
+        note: modal.note.trim(),
+        isActive: true,
+      };
+
+      if (onSaveActivityTemplate) {
         await onSaveActivityTemplate(template, true);
       }
     }

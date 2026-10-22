@@ -32,6 +32,35 @@ import {
 export type ReportPeriodType = 'daily' | 'monthly' | 'yearly';
 export type ViewMode = 'a4_template' | 'table';
 
+export const DEPARTMENT_NAMES: Record<DepartmentKey, string> = {
+  ER: 'งานอุบัติเหตุ-ฉุกเฉิน (ER)',
+  OPD: 'งานผู้ป่วยนอก (OPD)',
+  IPD1: 'หอผู้ป่วยใน 1 (IPD 1 สามัญ/หญิง-เด็ก)',
+  IPD2: 'หอผู้ป่วยใน 2 (IPD 2 ชาย/พิเศษ)',
+  LR: 'งานห้องคลอดและทารกแรกเกิด (LR)',
+};
+
+export const getDeptCensusSummary = (r: DailyRecord, deptKey: DepartmentKey): string => {
+  if (deptKey === 'ER') {
+    const totalER = r.er.triage1_resus + r.er.triage2_emergency + r.er.triage3_urgency + r.er.triage4_semiUrgent + r.er.triage5_nonUrgent;
+    return `รวม ${totalER} ราย (วิกฤต/ฉุกเฉิน ${r.er.triage1_resus + r.er.triage2_emergency}, สังเกต ${r.er.observationCases}, รีเฟอร์ ${r.er.ambulanceReferral})`;
+  }
+  if (deptKey === 'OPD') {
+    const totalOPD = r.opd.generalPatients + r.opd.chronicPatients + r.opd.minorSurgery + r.opd.specialClinic;
+    return `รวม ${totalOPD} ราย (ทั่วไป ${r.opd.generalPatients}, NCDs ${r.opd.chronicPatients}, หัตถการ ${r.opd.minorSurgery})`;
+  }
+  if (deptKey === 'IPD1') {
+    return `ครองเตียง ${r.ipd1.currentCensus}/${r.ipd1.bedCapacity} เตียง (ประเภท 4-5: ${r.ipd1.pcs4_intensiveCare + r.ipd1.pcs5_ventilator} ราย, รับใหม่ ${r.ipd1.admissions})`;
+  }
+  if (deptKey === 'IPD2') {
+    return `ครองเตียง ${r.ipd2.currentCensus}/${r.ipd2.bedCapacity} เตียง (ประเภท 4-5: ${r.ipd2.pcs4_intensiveCare + r.ipd2.pcs5_ventilator} ราย, รับใหม่ ${r.ipd2.admissions})`;
+  }
+  if (deptKey === 'LR') {
+    return `รอคลอด/ทำคลอด ${r.lr.stage1Latent + r.lr.stage1Active + r.lr.stage2Delivery} ราย (คลอด ${r.lr.stage2Delivery}, เสี่ยงสูง ${r.lr.highRiskCases})`;
+  }
+  return '';
+};
+
 interface ReportsViewProps {
   records: DailyRecord[];
   onSelectRecord: (date: string) => void;
@@ -135,6 +164,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
         totalSupport: 0,
         avgActualStaff: 0,
         avgRequiredStaff: 0,
+        avgGap: 0,
         avgFTE: 0,
         avgProductivity: 0,
         understaffedDays: 0,
@@ -165,32 +195,192 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
     });
 
     const count = displayedRecords.length;
+    const avgActual = Math.round(sumActual / count);
+    const avgReq = Math.round(sumRequired / count);
     return {
       totalDays: count,
       totalTNH: Number(sumTNH.toFixed(1)),
       totalDirect: Number(sumDirect.toFixed(1)),
       totalIndirect: Number(sumIndirect.toFixed(1)),
       totalSupport: Number(sumSupport.toFixed(1)),
-      avgActualStaff: Math.round(sumActual / count),
-      avgRequiredStaff: Math.round(sumRequired / count),
+      avgActualStaff: avgActual,
+      avgRequiredStaff: avgReq,
+      avgGap: Number((avgActual - avgReq).toFixed(1)),
       avgFTE: Number((sumFTE / count).toFixed(2)),
       avgProductivity: Math.round(sumProd / count),
       understaffedDays: underDays,
     };
   }, [displayedRecords, standardsConfig]);
 
+  // Aggregate departmental metrics for monthly/yearly period
+  const departmentSummaries = useMemo(() => {
+    const depts: DepartmentKey[] = ['ER', 'OPD', 'IPD1', 'IPD2', 'LR'];
+    const count = displayedRecords.length;
+    if (count === 0) {
+      const empty: Record<DepartmentKey, {
+        key: DepartmentKey;
+        name: string;
+        totalDirect: number;
+        totalIndirect: number;
+        totalSupport: number;
+        totalTNH: number;
+        sharePercent: number;
+        tnhSharePercent: number;
+        avgActualStaff: number;
+        avgRequiredStaff: number;
+        avgGap: number;
+        avgFTE: number;
+        avgProductivity: number;
+        status: 'balanced' | 'understaffed' | 'overstaffed';
+        understaffedDays: number;
+      }> = {} as any;
+      depts.forEach((d) => {
+        empty[d] = {
+          key: d,
+          name: DEPARTMENT_NAMES[d],
+          totalDirect: 0,
+          totalIndirect: 0,
+          totalSupport: 0,
+          totalTNH: 0,
+          sharePercent: 0,
+          tnhSharePercent: 0,
+          avgActualStaff: 0,
+          avgRequiredStaff: 0,
+          avgGap: 0,
+          avgFTE: 0,
+          avgProductivity: 0,
+          status: 'balanced',
+          understaffedDays: 0,
+        };
+      });
+      return empty;
+    }
+
+    let grandTNH = 0;
+    const raw: Record<DepartmentKey, {
+      direct: number;
+      indirect: number;
+      support: number;
+      tnh: number;
+      actual: number;
+      required: number;
+      fte: number;
+      prod: number;
+      under: number;
+    }> = {
+      ER: { direct: 0, indirect: 0, support: 0, tnh: 0, actual: 0, required: 0, fte: 0, prod: 0, under: 0 },
+      OPD: { direct: 0, indirect: 0, support: 0, tnh: 0, actual: 0, required: 0, fte: 0, prod: 0, under: 0 },
+      IPD1: { direct: 0, indirect: 0, support: 0, tnh: 0, actual: 0, required: 0, fte: 0, prod: 0, under: 0 },
+      IPD2: { direct: 0, indirect: 0, support: 0, tnh: 0, actual: 0, required: 0, fte: 0, prod: 0, under: 0 },
+      LR: { direct: 0, indirect: 0, support: 0, tnh: 0, actual: 0, required: 0, fte: 0, prod: 0, under: 0 },
+    };
+
+    displayedRecords.forEach((r) => {
+      const c = calculateHospitalOverall(r, standardsConfig);
+      grandTNH += c.totalNursingHours;
+      depts.forEach((d) => {
+        const dCalc = c.departments[d];
+        raw[d].direct += dCalc.directCareHours;
+        raw[d].indirect += dCalc.indirectCareHours;
+        raw[d].support += dCalc.supportCareHours;
+        raw[d].tnh += dCalc.totalNursingHours;
+        raw[d].actual += dCalc.totalActualStaff;
+        raw[d].required += dCalc.totalRequiredStaff;
+        raw[d].fte += dCalc.requiredFTE;
+        raw[d].prod += dCalc.productivityRate;
+        if (dCalc.status === 'understaffed') raw[d].under++;
+      });
+    });
+
+    const res: Record<DepartmentKey, {
+      key: DepartmentKey;
+      name: string;
+      totalDirect: number;
+      totalIndirect: number;
+      totalSupport: number;
+      totalTNH: number;
+      sharePercent: number;
+      tnhSharePercent: number;
+      avgActualStaff: number;
+      avgRequiredStaff: number;
+      avgGap: number;
+      avgFTE: number;
+      avgProductivity: number;
+      status: 'balanced' | 'understaffed' | 'overstaffed';
+      understaffedDays: number;
+    }> = {} as any;
+
+    depts.forEach((d) => {
+      const item = raw[d];
+      const avgActual = Number((item.actual / count).toFixed(1));
+      const avgReq = Number((item.required / count).toFixed(1));
+      const avgGap = Number((avgActual - avgReq).toFixed(1));
+      const avgProd = Math.round(item.prod / count);
+      const share = grandTNH > 0 ? Number(((item.tnh / grandTNH) * 100).toFixed(1)) : 0;
+
+      res[d] = {
+        key: d,
+        name: DEPARTMENT_NAMES[d],
+        totalDirect: Number(item.direct.toFixed(1)),
+        totalIndirect: Number(item.indirect.toFixed(1)),
+        totalSupport: Number(item.support.toFixed(1)),
+        totalTNH: Number(item.tnh.toFixed(1)),
+        sharePercent: share,
+        tnhSharePercent: share,
+        avgActualStaff: avgActual,
+        avgRequiredStaff: avgReq,
+        avgGap,
+        avgFTE: Number((item.fte / count).toFixed(2)),
+        avgProductivity: avgProd,
+        understaffedDays: item.under,
+        status: avgGap < 0 ? 'understaffed' : avgProd > 115 ? 'overstaffed' : 'balanced',
+      };
+    });
+
+    return res;
+  }, [displayedRecords, standardsConfig]);
+
+  // List of department summaries for easy rendering in tables and grids
+  const departmentSummariesList = useMemo(() => {
+    const depts: DepartmentKey[] = ['ER', 'OPD', 'IPD1', 'IPD2', 'LR'];
+    return depts.map((d) => departmentSummaries[d]).filter(Boolean);
+  }, [departmentSummaries]);
+
+  // Active metrics based on whether All Departments or Specific Department is selected
+  const activeMetrics = useMemo(() => {
+    if (selectedDepartmentFilter === 'all') {
+      return aggregateMetrics;
+    }
+    const d = departmentSummaries[selectedDepartmentFilter as DepartmentKey];
+    if (!d) return aggregateMetrics;
+    return {
+      totalDays: displayedRecords.length,
+      totalTNH: d.totalTNH,
+      totalDirect: d.totalDirect,
+      totalIndirect: d.totalIndirect,
+      totalSupport: d.totalSupport,
+      avgActualStaff: d.avgActualStaff,
+      avgRequiredStaff: d.avgRequiredStaff,
+      avgGap: d.avgGap,
+      avgFTE: d.avgFTE,
+      avgProductivity: d.avgProductivity,
+      understaffedDays: d.understaffedDays,
+    };
+  }, [selectedDepartmentFilter, aggregateMetrics, departmentSummaries, displayedRecords.length]);
+
   const handlePrint = () => {
     window.print();
   };
 
   const handleExcelExport = () => {
+    const deptSuffix = selectedDepartmentFilter !== 'all' ? `_แผนก${selectedDepartmentFilter}` : '_รวมทุกแผนก';
     const periodLabel =
       periodType === 'daily'
-        ? `รายงานค่างานประจำวัน_${selectedDailyDate}`
+        ? `รายงานค่างานประจำวัน_${selectedDailyDate}${deptSuffix}`
         : periodType === 'monthly'
-        ? `รายงานค่างานประจำเดือน_${selectedMonth}`
-        : `รายงานค่างานประจำปี_${selectedYear}`;
-    exportToExcel(displayedRecords, standardsConfig, periodLabel);
+        ? `รายงานค่างานประจำเดือน_${selectedMonth}${deptSuffix}`
+        : `รายงานค่างานประจำปี_${selectedYear}${deptSuffix}`;
+    exportToExcel(displayedRecords, standardsConfig, periodLabel, selectedDepartmentFilter);
   };
 
   // Thai Period Display Title
@@ -207,6 +397,15 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
       return `รายงานประจำปี: พ.ศ. ${thaiYear} (ค.ศ. ${selectedYear})`;
     }
   }, [periodType, selectedDailyDate, selectedMonth, selectedYear]);
+
+  // Dynamic Report Subtitle
+  const reportPeriodTitle = useMemo(() => {
+    if (selectedDepartmentFilter === 'all') {
+      return `สรุปสถิติค่างานและอัตรากำลัง: ภาพรวม 5 ฝ่ายงาน (${periodTitle})`;
+    }
+    const deptName = DEPARTMENT_NAMES[selectedDepartmentFilter as DepartmentKey] || selectedDepartmentFilter;
+    return `สรุปสถิติค่างานและอัตรากำลัง: ${deptName} (${periodTitle})`;
+  }, [selectedDepartmentFilter, periodTitle]);
 
   // Departments list with friendly labels
   const departmentsData = useMemo(() => {
@@ -540,92 +739,285 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                 <div>
                   <h1 className="text-[13px] font-bold text-slate-900">โรงพยาบาลสังขละบุรี จังหวัดกาญจนบุรี</h1>
                   <h2 className="text-[10.5px] font-bold text-emerald-950">
-                    สรุปรายงานสถิติค่างานและอัตรากำลังทางการพยาบาล ({periodTitle})
+                    {reportPeriodTitle}
                   </h2>
                 </div>
               </div>
               <div className="text-right text-[9px] text-gray-500">
-                หน้า 1 • ออกรายงานเมื่อ {new Date().toLocaleDateString('th-TH')}
+                {periodTitle} • ออกรายงานเมื่อ {new Date().toLocaleDateString('th-TH')}
               </div>
             </div>
 
-            {/* Aggregate summary */}
+            {/* Aggregate summary KPI cards */}
             <div className="grid grid-cols-4 gap-2 border border-gray-300 p-2 rounded mb-2 text-center text-[10px]">
               <div>
                 <span className="text-gray-500 block">จำนวนวันบันทึก</span>
-                <span className="font-bold text-[12px]">{aggregateMetrics.totalDays} วัน</span>
+                <span className="font-bold text-[12px]">{activeMetrics.totalDays} วัน</span>
               </div>
               <div>
-                <span className="text-gray-500 block">ค่างานรวม (TNH)</span>
-                <span className="font-bold text-[12px] text-emerald-800">{aggregateMetrics.totalTNH} ชม.</span>
+                <span className="text-gray-500 block">
+                  {selectedDepartmentFilter === 'all' ? 'ค่างานรวม รพ. (TNH)' : 'ค่างานแผนก (TNH)'}
+                </span>
+                <span className="font-bold text-[12px] text-emerald-800">{activeMetrics.totalTNH} ชม.</span>
+                <span className="text-[8.5px] text-gray-500 block">
+                  หลัก: {activeMetrics.totalDirect} • รอง: {activeMetrics.totalIndirect} • หนุน: {activeMetrics.totalSupport}
+                </span>
               </div>
               <div>
                 <span className="text-gray-500 block">พยาบาลเฉลี่ยจริง/ควรมี</span>
-                <span className="font-bold text-[12px]">{aggregateMetrics.avgActualStaff} / {aggregateMetrics.avgRequiredStaff} คน</span>
+                <span className="font-bold text-[12px]">{activeMetrics.avgActualStaff} / {activeMetrics.avgRequiredStaff} คน</span>
+                <span className="text-[8.5px] text-gray-500 block">
+                  ส่วนต่าง: {activeMetrics.avgGap >= 0 ? `+${activeMetrics.avgGap}` : activeMetrics.avgGap} คน (FTE: {activeMetrics.avgFTE})
+                </span>
               </div>
               <div>
-                <span className="text-gray-500 block">ผลิตภาพเฉลี่ยรวม</span>
-                <span className="font-bold text-[12px] text-purple-800">{aggregateMetrics.avgProductivity}%</span>
+                <span className="text-gray-500 block">ผลิตภาพเฉลี่ย</span>
+                <span className="font-bold text-[12px] text-purple-800">{activeMetrics.avgProductivity}%</span>
+                <span className="text-[8.5px] text-gray-500 block">
+                  {activeMetrics.avgProductivity >= 85 && activeMetrics.avgProductivity <= 115
+                    ? '🟢 พอเหมาะ'
+                    : activeMetrics.avgProductivity > 115
+                    ? '🟡 เกินเกณฑ์'
+                    : '🔴 ขาดแคลน'} (ขาด {activeMetrics.understaffedDays} วัน)
+                </span>
               </div>
             </div>
 
-            {/* Table */}
-            <table className="w-full border-collapse border border-gray-400 text-[9.5px] mb-3">
-              <thead>
-                <tr className="bg-gray-100 font-bold text-center">
-                  <th className="border border-gray-400 p-1">วันที่</th>
-                  <th className="border border-gray-400 p-1">งานหลัก</th>
-                  <th className="border border-gray-400 p-1">งานรอง</th>
-                  <th className="border border-gray-400 p-1">งานหนุน</th>
-                  <th className="border border-gray-400 p-1 bg-emerald-50">TNH รวม</th>
-                  <th className="border border-gray-400 p-1">จริง/ควรมี</th>
-                  <th className="border border-gray-400 p-1">Gap</th>
-                  <th className="border border-gray-400 p-1">ผลิตภาพ</th>
-                  <th className="border border-gray-400 p-1">สถานะ</th>
-                  <th className="border border-gray-400 p-1">ผู้ตรวจนับ</th>
-                </tr>
-              </thead>
-              <tbody>
-                {displayedRecords.map((r) => {
-                  const c = calculateHospitalOverall(r, standardsConfig);
-                  return (
-                    <tr key={r.id} className="text-center">
-                      <td className="border border-gray-400 p-0.5 font-mono">{r.date}</td>
-                      <td className="border border-gray-400 p-0.5 font-mono">{c.totalDirectCareHours}</td>
-                      <td className="border border-gray-400 p-0.5 font-mono">{c.totalIndirectCareHours}</td>
-                      <td className="border border-gray-400 p-0.5 font-mono">{c.totalSupportCareHours}</td>
-                      <td className="border border-gray-400 p-0.5 font-mono font-bold bg-emerald-50/40">{c.totalNursingHours}</td>
-                      <td className="border border-gray-400 p-0.5 font-mono">{c.totalActualStaff}/{c.totalRequiredStaff}</td>
-                      <td className="border border-gray-400 p-0.5 font-mono font-bold">{c.overallGap >= 0 ? `+${c.overallGap}` : c.overallGap}</td>
-                      <td className="border border-gray-400 p-0.5 font-mono">{c.averageProductivityRate}%</td>
-                      <td className="border border-gray-400 p-0.5 text-[8.5px]">
-                        {c.overallStatus === 'balanced' ? 'พอเหมาะ' : c.overallStatus === 'understaffed' ? 'ขาดแคลน' : 'เกินเกณฑ์'}
-                      </td>
-                      <td className="border border-gray-400 p-0.5 text-left truncate max-w-[90px]">{r.recorderName || '-'}</td>
+            {/* SECTION A: If "All Departments" is selected -> Show 5-Department Summary Table First */}
+            {selectedDepartmentFilter === 'all' && (
+              <div className="mb-3">
+                <div className="text-[10px] font-bold text-slate-900 mb-1 flex items-center justify-between">
+                  <span>ตารางสรุปเปรียบเทียบค่างานและอัตรากำลังจำแนกราย 5 ฝ่ายงาน ({periodTitle})</span>
+                  <span className="text-[9px] text-gray-500 font-normal">เป้าหมายผลิตภาพ: 85 - 115%</span>
+                </div>
+                <table className="w-full border-collapse border border-gray-400 text-[9px]">
+                  <thead>
+                    <tr className="bg-gray-100 font-bold text-center">
+                      <th className="border border-gray-400 p-1 text-left">ฝ่ายงาน / แผนกบริการ</th>
+                      <th className="border border-gray-400 p-1">งานหลัก</th>
+                      <th className="border border-gray-400 p-1">งานรอง</th>
+                      <th className="border border-gray-400 p-1">งานหนุน</th>
+                      <th className="border border-gray-400 p-1 bg-emerald-50">TNH รวม</th>
+                      <th className="border border-gray-400 p-1">สัดส่วน</th>
+                      <th className="border border-gray-400 p-1">จริง/ควรมี</th>
+                      <th className="border border-gray-400 p-1">Gap</th>
+                      <th className="border border-gray-400 p-1">ผลิตภาพ</th>
+                      <th className="border border-gray-400 p-1">สถานะ</th>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-
-            {/* Signatures */}
-            <div className="page-break-inside-avoid pt-6 border-t border-gray-300 text-center text-[10px]">
-              <div className="grid grid-cols-2 gap-8 max-w-lg mx-auto">
-                <div className="space-y-6">
-                  <div>ลงชื่อ..........................................................</div>
-                  <div>
-                    <p className="font-semibold">(พว. หวานเพ็ญ   สาลี)</p>
-                    <p className="text-gray-600 text-[9px]">หัวหน้ากลุ่มงานการพยาบาล</p>
-                  </div>
-                </div>
-                <div className="space-y-6">
-                  <div>ลงชื่อ..........................................................</div>
-                  <div>
-                    <p className="font-semibold">(นายแพทย์จิรวัฒน์   วงษ์สวัสดิ์)</p>
-                    <p className="text-gray-600 text-[9px]">ผู้อำนวยการโรงพยาบาลสังขละบุรี</p>
-                  </div>
-                </div>
+                  </thead>
+                  <tbody>
+                    {(['ER', 'OPD', 'IPD1', 'IPD2', 'LR'] as DepartmentKey[]).map((dKey) => {
+                      const d = departmentSummaries[dKey];
+                      return (
+                        <tr key={dKey} className="text-center">
+                          <td className="border border-gray-400 p-1 text-left font-semibold">{d.name}</td>
+                          <td className="border border-gray-400 p-1 font-mono">{d.totalDirect}</td>
+                          <td className="border border-gray-400 p-1 font-mono">{d.totalIndirect}</td>
+                          <td className="border border-gray-400 p-1 font-mono">{d.totalSupport}</td>
+                          <td className="border border-gray-400 p-1 font-mono font-bold bg-emerald-50/50">{d.totalTNH}</td>
+                          <td className="border border-gray-400 p-1 font-mono">{d.sharePercent}%</td>
+                          <td className="border border-gray-400 p-1 font-mono">{d.avgActualStaff}/{d.avgRequiredStaff}</td>
+                          <td className={`border border-gray-400 p-1 font-mono font-bold ${d.avgGap < 0 ? 'text-rose-700' : 'text-emerald-800'}`}>
+                            {d.avgGap >= 0 ? `+${d.avgGap}` : d.avgGap}
+                          </td>
+                          <td className="border border-gray-400 p-1 font-mono font-bold text-purple-900">{d.avgProductivity}%</td>
+                          <td className="border border-gray-400 p-1 text-[8.5px]">
+                            {d.status === 'balanced' ? '🟢 พอเหมาะ' : d.status === 'understaffed' ? '🔴 ขาดแคลน' : '🟡 เกินเกณฑ์'}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    <tr className="bg-gray-100 font-bold text-center border-t-2 border-gray-600">
+                      <td className="border border-gray-400 p-1 text-right pr-2">รวมทั้งโรงพยาบาล (Total)</td>
+                      <td className="border border-gray-400 p-1 font-mono">{aggregateMetrics.totalDirect}</td>
+                      <td className="border border-gray-400 p-1 font-mono">{aggregateMetrics.totalIndirect}</td>
+                      <td className="border border-gray-400 p-1 font-mono">{aggregateMetrics.totalSupport}</td>
+                      <td className="border border-gray-400 p-1 font-mono font-bold bg-emerald-100 text-emerald-950">{aggregateMetrics.totalTNH}</td>
+                      <td className="border border-gray-400 p-1 font-mono">100%</td>
+                      <td className="border border-gray-400 p-1 font-mono">{aggregateMetrics.avgActualStaff}/{aggregateMetrics.avgRequiredStaff}</td>
+                      <td className={`border border-gray-400 p-1 font-mono font-bold ${aggregateMetrics.avgActualStaff - aggregateMetrics.avgRequiredStaff < 0 ? 'text-rose-700' : 'text-emerald-800'}`}>
+                        {aggregateMetrics.avgActualStaff - aggregateMetrics.avgRequiredStaff >= 0
+                          ? `+${aggregateMetrics.avgActualStaff - aggregateMetrics.avgRequiredStaff}`
+                          : aggregateMetrics.avgActualStaff - aggregateMetrics.avgRequiredStaff}
+                      </td>
+                      <td className="border border-gray-400 p-1 font-mono font-bold text-purple-900">{aggregateMetrics.avgProductivity}%</td>
+                      <td className="border border-gray-400 p-1 text-[8.5px]">ภาพรวม 5 แผนก</td>
+                    </tr>
+                  </tbody>
+                </table>
               </div>
+            )}
+
+            {/* SECTION B: Daily Records Breakdown Table */}
+            <div className="mb-3">
+              <div className="text-[10px] font-bold text-slate-900 mb-1 flex items-center justify-between">
+                <span>
+                  {selectedDepartmentFilter === 'all'
+                    ? `ตารางบันทึกสถิติค่างานรายวันภาพรวมโรงพยาบาล (${periodTitle})`
+                    : `ตารางบันทึกสถิติค่างานรายวัน: ${DEPARTMENT_NAMES[selectedDepartmentFilter as DepartmentKey]} (${periodTitle})`}
+                </span>
+                <span className="text-[9px] text-gray-500 font-normal">จำนวน {displayedRecords.length} วัน</span>
+              </div>
+
+              {selectedDepartmentFilter === 'all' ? (
+                // Table for All Departments (Hospital Total)
+                <table className="w-full border-collapse border border-gray-400 text-[9.5px]">
+                  <thead>
+                    <tr className="bg-gray-100 font-bold text-center">
+                      <th className="border border-gray-400 p-1 w-20">วันที่</th>
+                      <th className="border border-gray-400 p-1">งานหลัก</th>
+                      <th className="border border-gray-400 p-1">งานรอง</th>
+                      <th className="border border-gray-400 p-1">งานหนุน</th>
+                      <th className="border border-gray-400 p-1 bg-emerald-50">TNH รวม</th>
+                      <th className="border border-gray-400 p-1">จริง/ควรมี</th>
+                      <th className="border border-gray-400 p-1">Gap</th>
+                      <th className="border border-gray-400 p-1">ผลิตภาพ</th>
+                      <th className="border border-gray-400 p-1">สถานะ</th>
+                      <th className="border border-gray-400 p-1">ผู้ตรวจนับ</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {displayedRecords.map((r) => {
+                      const c = calculateHospitalOverall(r, standardsConfig);
+                      return (
+                        <tr key={r.id} className="text-center">
+                          <td className="border border-gray-400 p-0.5 font-mono">{r.date}</td>
+                          <td className="border border-gray-400 p-0.5 font-mono">{c.totalDirectCareHours}</td>
+                          <td className="border border-gray-400 p-0.5 font-mono">{c.totalIndirectCareHours}</td>
+                          <td className="border border-gray-400 p-0.5 font-mono">{c.totalSupportCareHours}</td>
+                          <td className="border border-gray-400 p-0.5 font-mono font-bold bg-emerald-50/40">{c.totalNursingHours}</td>
+                          <td className="border border-gray-400 p-0.5 font-mono">{c.totalActualStaff}/{c.totalRequiredStaff}</td>
+                          <td className={`border border-gray-400 p-0.5 font-mono font-bold ${c.overallGap < 0 ? 'text-rose-700' : 'text-emerald-800'}`}>
+                            {c.overallGap >= 0 ? `+${c.overallGap}` : c.overallGap}
+                          </td>
+                          <td className="border border-gray-400 p-0.5 font-mono">{c.averageProductivityRate}%</td>
+                          <td className="border border-gray-400 p-0.5 text-[8.5px]">
+                            {c.overallStatus === 'balanced' ? 'พอเหมาะ' : c.overallStatus === 'understaffed' ? 'ขาดแคลน' : 'เกินเกณฑ์'}
+                          </td>
+                          <td className="border border-gray-400 p-0.5 text-left truncate max-w-[90px]">{r.recorderName || '-'}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              ) : (
+                // Table for Specific Department
+                <table className="w-full border-collapse border border-gray-400 text-[9.5px]">
+                  <thead>
+                    <tr className="bg-gray-100 font-bold text-center">
+                      <th className="border border-gray-400 p-1 w-20">วันที่</th>
+                      <th className="border border-gray-400 p-1 text-left">ปริมาณงาน / เคสบริการ</th>
+                      <th className="border border-gray-400 p-1">งานหลัก</th>
+                      <th className="border border-gray-400 p-1">งานรอง</th>
+                      <th className="border border-gray-400 p-1">งานหนุน</th>
+                      <th className="border border-gray-400 p-1 bg-emerald-50">TNH แผนก</th>
+                      <th className="border border-gray-400 p-1">จริง/ควรมี</th>
+                      <th className="border border-gray-400 p-1">Gap</th>
+                      <th className="border border-gray-400 p-1">ผลิตภาพ</th>
+                      <th className="border border-gray-400 p-1">สถานะ</th>
+                      <th className="border border-gray-400 p-1">ผู้ตรวจนับ</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {displayedRecords.map((r) => {
+                      const c = calculateHospitalOverall(r, standardsConfig);
+                      const dKey = selectedDepartmentFilter as DepartmentKey;
+                      const d = c.departments[dKey];
+                      const census = getDeptCensusSummary(r, dKey);
+
+                      return (
+                        <tr key={r.id} className="text-center">
+                          <td className="border border-gray-400 p-0.5 font-mono">{r.date}</td>
+                          <td className="border border-gray-400 p-0.5 text-left text-[8.5px] text-gray-700 truncate max-w-[150px]">
+                            {census}
+                          </td>
+                          <td className="border border-gray-400 p-0.5 font-mono">{d.directCareHours}</td>
+                          <td className="border border-gray-400 p-0.5 font-mono">{d.indirectCareHours}</td>
+                          <td className="border border-gray-400 p-0.5 font-mono">{d.supportCareHours}</td>
+                          <td className="border border-gray-400 p-0.5 font-mono font-bold bg-emerald-50/40">{d.totalNursingHours}</td>
+                          <td className="border border-gray-400 p-0.5 font-mono">{d.totalActualStaff}/{d.totalRequiredStaff}</td>
+                          <td className={`border border-gray-400 p-0.5 font-mono font-bold ${d.staffingGap < 0 ? 'text-rose-700' : 'text-emerald-800'}`}>
+                            {d.staffingGap >= 0 ? `+${d.staffingGap}` : d.staffingGap}
+                          </td>
+                          <td className="border border-gray-400 p-0.5 font-mono font-bold text-purple-900">{d.productivityRate}%</td>
+                          <td className="border border-gray-400 p-0.5 text-[8.5px]">
+                            {d.status === 'balanced' ? '🟢 พอเหมาะ' : d.status === 'understaffed' ? '🔴 ขาดแคลน' : '🟡 เกินเกณฑ์'}
+                          </td>
+                          <td className="border border-gray-400 p-0.5 text-left truncate max-w-[85px]">{r.recorderName || '-'}</td>
+                        </tr>
+                      );
+                    })}
+                    <tr className="bg-gray-100 font-bold text-center border-t-2 border-gray-600">
+                      <td colSpan={2} className="border border-gray-400 p-1 text-right pr-2">
+                        รวม / เฉลี่ยประจำช่วง ({DEPARTMENT_NAMES[selectedDepartmentFilter as DepartmentKey]})
+                      </td>
+                      <td className="border border-gray-400 p-1 font-mono">{activeMetrics.totalDirect}</td>
+                      <td className="border border-gray-400 p-1 font-mono">{activeMetrics.totalIndirect}</td>
+                      <td className="border border-gray-400 p-1 font-mono">{activeMetrics.totalSupport}</td>
+                      <td className="border border-gray-400 p-1 font-mono font-bold bg-emerald-100 text-emerald-950">{activeMetrics.totalTNH}</td>
+                      <td className="border border-gray-400 p-1 font-mono">{activeMetrics.avgActualStaff}/{activeMetrics.avgRequiredStaff}</td>
+                      <td className={`border border-gray-400 p-1 font-mono font-bold ${activeMetrics.avgGap < 0 ? 'text-rose-700' : 'text-emerald-800'}`}>
+                        {activeMetrics.avgGap >= 0 ? `+${activeMetrics.avgGap}` : activeMetrics.avgGap}
+                      </td>
+                      <td className="border border-gray-400 p-1 font-mono font-bold text-purple-900">{activeMetrics.avgProductivity}%</td>
+                      <td colSpan={2} className="border border-gray-400 p-1 text-[8.5px]">เฉลี่ยต่อวัน</td>
+                    </tr>
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            {/* Official Signatures */}
+            <div className="page-break-inside-avoid pt-6 border-t border-gray-300 text-center text-[10px]">
+              {selectedDepartmentFilter !== 'all' ? (
+                // 3 Signatures for Specific Department
+                <div className="grid grid-cols-3 gap-4 max-w-xl mx-auto">
+                  <div className="space-y-6">
+                    <div>ลงชื่อ..........................................................</div>
+                    <div>
+                      <p className="font-semibold">หัวหน้างาน/หัวหน้าตึก</p>
+                      <p className="text-gray-600 text-[9px]">{DEPARTMENT_NAMES[selectedDepartmentFilter as DepartmentKey]}</p>
+                      <p className="text-gray-400 text-[8px]">วันที่ ....../....../......</p>
+                    </div>
+                  </div>
+                  <div className="space-y-6">
+                    <div>ลงชื่อ..........................................................</div>
+                    <div>
+                      <p className="font-semibold">(พว. หวานเพ็ญ   สาลี)</p>
+                      <p className="text-gray-600 text-[9px]">หัวหน้ากลุ่มงานการพยาบาล</p>
+                      <p className="text-gray-400 text-[8px]">วันที่ ....../....../......</p>
+                    </div>
+                  </div>
+                  <div className="space-y-6">
+                    <div>ลงชื่อ..........................................................</div>
+                    <div>
+                      <p className="font-semibold">(นายแพทย์จิรวัฒน์   วงษ์สวัสดิ์)</p>
+                      <p className="text-gray-600 text-[9px]">ผู้อำนวยการโรงพยาบาลสังขละบุรี</p>
+                      <p className="text-gray-400 text-[8px]">วันที่ ....../....../......</p>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                // 2 Signatures for Hospital Overall
+                <div className="grid grid-cols-2 gap-8 max-w-lg mx-auto">
+                  <div className="space-y-6">
+                    <div>ลงชื่อ..........................................................</div>
+                    <div>
+                      <p className="font-semibold">(พว. หวานเพ็ญ   สาลี)</p>
+                      <p className="text-gray-600 text-[9px]">หัวหน้ากลุ่มงานการพยาบาล</p>
+                      <p className="text-gray-400 text-[8.5px]">วันที่ ....../....../......</p>
+                    </div>
+                  </div>
+                  <div className="space-y-6">
+                    <div>ลงชื่อ..........................................................</div>
+                    <div>
+                      <p className="font-semibold">(นายแพทย์จิรวัฒน์   วงษ์สวัสดิ์)</p>
+                      <p className="text-gray-600 text-[9px]">ผู้อำนวยการโรงพยาบาลสังขละบุรี</p>
+                      <p className="text-gray-400 text-[8.5px]">วันที่ ....../....../......</p>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -813,6 +1205,34 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                   <option value="LR" className="dark:bg-slate-900">ห้องคลอด (LR)</option>
                 </select>
               </div>
+            </div>
+
+            {/* Quick Department Filter Pills */}
+            <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-slate-100 dark:border-slate-800/80">
+              <span className="text-xs text-slate-500 dark:text-slate-400 font-medium mr-1">แยกดูรายแผนก:</span>
+              {[
+                { id: 'all', label: '🏥 รวมทุกฝ่ายงาน (5 แผนก)' },
+                { id: 'ER', label: '🚨 ER ห้องฉุกเฉิน' },
+                { id: 'OPD', label: '🩺 OPD ผู้ป่วยนอก' },
+                { id: 'IPD1', label: '🛏️ IPD 1 ชาย/สามัญ' },
+                { id: 'IPD2', label: '🛏️ IPD 2 หญิง/เด็ก' },
+                { id: 'LR', label: '👶 LR ห้องคลอด' },
+              ].map((dept) => {
+                const isSelected = selectedDepartmentFilter === dept.id;
+                return (
+                  <button
+                    key={dept.id}
+                    onClick={() => setSelectedDepartmentFilter(dept.id)}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-all cursor-pointer ${
+                      isSelected
+                        ? 'bg-emerald-600 text-white shadow-xs'
+                        : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+                    }`}
+                  >
+                    {dept.label}
+                  </button>
+                );
+              })}
             </div>
           </div>
 
@@ -1093,92 +1513,292 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                         <div>
                           <h1 className="text-[14px] font-bold text-slate-900 font-serif">โรงพยาบาลสังขละบุรี จังหวัดกาญจนบุรี</h1>
                           <h2 className="text-[11px] font-bold text-emerald-950">
-                            สรุปรายงานสถิติค่างานและอัตรากำลังทางการพยาบาล ({periodTitle})
+                            {selectedDepartmentFilter !== 'all'
+                              ? `สรุปรายงานสถิติค่างานและอัตรากำลัง: ${DEPARTMENT_NAMES[selectedDepartmentFilter as DepartmentKey]} (${periodTitle})`
+                              : `สรุปรายงานสถิติค่างานและอัตรากำลังทางการพยาบาล (${periodTitle})`}
                           </h2>
+                          <p className="text-[9.5px] text-slate-600">
+                            กลุ่มงานการพยาบาล • การประเมินค่างาน 3 ส่วน (งานหลัก • งานรอง • งานสนับสนุน) ตามมาตรฐานสภาการพยาบาล
+                          </p>
                         </div>
                       </div>
                       <div className="text-right text-[9.5px] text-slate-500">
-                        {periodTitle} • ออกรายงานเมื่อ {new Date().toLocaleDateString('th-TH')}
+                        <span className="inline-block px-2 py-0.5 bg-emerald-100 text-emerald-900 font-bold text-[9.5px] rounded mb-1">
+                          {selectedDepartmentFilter !== 'all' ? `แบบรายงาน ${DEPARTMENT_NAMES[selectedDepartmentFilter as DepartmentKey]}` : 'แบบรายงานรวมทุกฝ่ายงาน'}
+                        </span>
+                        <div>{periodTitle}</div>
+                        <div>ออกรายงานเมื่อ {new Date().toLocaleDateString('th-TH')}</div>
                       </div>
                     </div>
 
                     {/* Aggregate stats */}
-                    <div className="grid grid-cols-4 gap-2 border border-slate-300 p-2.5 rounded-lg text-center">
+                    <div className="grid grid-cols-4 gap-2 border border-slate-300 p-2.5 rounded-lg text-center bg-slate-50">
                       <div>
                         <span className="text-slate-500 block text-[9.5px]">จำนวนวันบันทึก</span>
-                        <span className="font-bold text-[13px]">{aggregateMetrics.totalDays} วัน</span>
+                        <span className="font-bold text-[13px]">{activeMetrics.totalDays} วัน</span>
                       </div>
                       <div>
                         <span className="text-slate-500 block text-[9.5px]">ค่างานรวม (TNH)</span>
-                        <span className="font-bold text-[13px] text-emerald-700">{aggregateMetrics.totalTNH} ชม.</span>
+                        <span className="font-bold text-[13px] text-emerald-700">{activeMetrics.totalTNH} ชม.</span>
+                        <span className="text-[9px] text-slate-500 block">
+                          หลัก {activeMetrics.totalDirect} / รอง {activeMetrics.totalIndirect} / หนุน {activeMetrics.totalSupport}
+                        </span>
                       </div>
                       <div>
                         <span className="text-slate-500 block text-[9.5px]">พยาบาลเฉลี่ย (จริง/ควรมี)</span>
-                        <span className="font-bold text-[13px]">{aggregateMetrics.avgActualStaff} / {aggregateMetrics.avgRequiredStaff} คน</span>
+                        <span className="font-bold text-[13px] text-blue-700">{activeMetrics.avgActualStaff}</span>
+                        <span className="text-slate-400"> / </span>
+                        <span className="font-bold text-[13px] text-slate-800">{activeMetrics.avgRequiredStaff} คน</span>
+                        <span className={`text-[9px] block font-bold ${activeMetrics.avgGap < 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
+                          Gap เฉลี่ย: {activeMetrics.avgGap >= 0 ? `+${activeMetrics.avgGap}` : activeMetrics.avgGap} คน
+                        </span>
                       </div>
                       <div>
                         <span className="text-slate-500 block text-[9.5px]">ผลิตภาพเฉลี่ยรวม</span>
-                        <span className="font-bold text-[13px] text-purple-700">{aggregateMetrics.avgProductivity}%</span>
+                        <span className="font-bold text-[13px] text-purple-700">{activeMetrics.avgProductivity}%</span>
+                        <span className="text-[9px] text-slate-500 block">
+                          วันขาดแคลน: {activeMetrics.understaffedDays} วัน
+                        </span>
                       </div>
                     </div>
 
-                    {/* Records Table */}
-                    <table className="w-full border-collapse border border-slate-400 text-[9.5px]">
-                      <thead>
-                        <tr className="bg-slate-100 font-bold text-center">
-                          <th className="border border-slate-400 p-1">วันที่</th>
-                          <th className="border border-slate-400 p-1">งานหลัก</th>
-                          <th className="border border-slate-400 p-1">งานรอง</th>
-                          <th className="border border-slate-400 p-1">งานหนุน</th>
-                          <th className="border border-slate-400 p-1 bg-emerald-50">TNH รวม</th>
-                          <th className="border border-slate-400 p-1">จริง/ควรมี</th>
-                          <th className="border border-slate-400 p-1">Gap</th>
-                          <th className="border border-slate-400 p-1">ผลิตภาพ</th>
-                          <th className="border border-slate-400 p-1">สถานะ</th>
-                          <th className="border border-slate-400 p-1">ผู้ตรวจนับ</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {displayedRecords.map((r) => {
-                          const c = calculateHospitalOverall(r, standardsConfig);
-                          return (
-                            <tr key={r.id} className="text-center hover:bg-slate-50">
-                              <td className="border border-slate-400 p-1 font-mono">{r.date}</td>
-                              <td className="border border-slate-400 p-1 font-mono">{c.totalDirectCareHours}</td>
-                              <td className="border border-slate-400 p-1 font-mono">{c.totalIndirectCareHours}</td>
-                              <td className="border border-slate-400 p-1 font-mono">{c.totalSupportCareHours}</td>
-                              <td className="border border-slate-400 p-1 font-mono font-bold bg-emerald-50/50">{c.totalNursingHours}</td>
-                              <td className="border border-slate-400 p-1 font-mono">{c.totalActualStaff}/{c.totalRequiredStaff}</td>
-                              <td className="border border-slate-400 p-1 font-mono font-bold">{c.overallGap >= 0 ? `+${c.overallGap}` : c.overallGap}</td>
-                              <td className="border border-slate-400 p-1 font-mono">{c.averageProductivityRate}%</td>
-                              <td className="border border-slate-400 p-1 text-[9px]">
-                                {c.overallStatus === 'balanced' ? 'พอเหมาะ' : c.overallStatus === 'understaffed' ? 'ขาดแคลน' : 'เกินเกณฑ์'}
-                              </td>
-                              <td className="border border-slate-400 p-1 text-left truncate max-w-[90px]">{r.recorderName || '-'}</td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-
-                    {/* Signatures */}
-                    <div className="pt-8 border-t border-slate-300 text-center text-[10.5px]">
-                      <div className="grid grid-cols-2 gap-8 max-w-md mx-auto">
-                        <div className="space-y-6">
-                          <div>ลงชื่อ..........................................................</div>
-                          <div>
-                            <p className="font-semibold">(พว. หวานเพ็ญ   สาลี)</p>
-                            <p className="text-slate-600 text-[9.5px]">หัวหน้ากลุ่มงานการพยาบาล</p>
+                    {selectedDepartmentFilter === 'all' ? (
+                      // Section 1: 5-Department Comparison Table
+                      <div className="space-y-3">
+                        <div>
+                          <div className="text-[10.5px] font-bold text-slate-900 mb-1 flex items-center justify-between">
+                            <span>1. ตารางสรุปเปรียบเทียบภาระงาน 5 ฝ่ายงาน ประจำช่วง ({periodTitle})</span>
+                            <span className="text-[9px] text-slate-500">เป้าหมายผลิตภาพ: 85 - 115%</span>
                           </div>
+                          <table className="w-full border-collapse border border-slate-400 text-[9px]">
+                            <thead>
+                              <tr className="bg-slate-100 font-bold text-center">
+                                <th className="border border-slate-400 p-1 text-left w-[24%]">ฝ่ายงาน / แผนกบริการ</th>
+                                <th className="border border-slate-400 p-1 w-[12%] bg-emerald-50">TNH รวม (ชม.)</th>
+                                <th className="border border-slate-400 p-1 w-[9%]">สัดส่วนภาระ</th>
+                                <th className="border border-slate-400 p-1 w-[9%]">งานหลัก</th>
+                                <th className="border border-slate-400 p-1 w-[9%]">งานรอง</th>
+                                <th className="border border-slate-400 p-1 w-[9%]">งานหนุน</th>
+                                <th className="border border-slate-400 p-1 w-[10%]">เฉลี่ยจริง/ควรมี</th>
+                                <th className="border border-slate-400 p-1 w-[8%]">Gap เฉลี่ย</th>
+                                <th className="border border-slate-400 p-1 w-[8%]">ผลิตภาพ</th>
+                                <th className="border border-slate-400 p-1 w-[8%]">วันขาดแคลน</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {departmentSummariesList.map((dept) => (
+                                <tr key={dept.key} className="text-center hover:bg-slate-50">
+                                  <td className="border border-slate-400 p-1 text-left font-semibold text-slate-900">
+                                    {dept.name}
+                                  </td>
+                                  <td className="border border-slate-400 p-1 font-mono font-bold bg-emerald-50/50">
+                                    {dept.totalTNH}
+                                  </td>
+                                  <td className="border border-slate-400 p-1 font-mono font-semibold text-slate-700">
+                                    {dept.tnhSharePercent}%
+                                  </td>
+                                  <td className="border border-slate-400 p-1 font-mono">{dept.totalDirect}</td>
+                                  <td className="border border-slate-400 p-1 font-mono">{dept.totalIndirect}</td>
+                                  <td className="border border-slate-400 p-1 font-mono">{dept.totalSupport}</td>
+                                  <td className="border border-slate-400 p-1 font-mono">
+                                    {dept.avgActualStaff}/{dept.avgRequiredStaff}
+                                  </td>
+                                  <td className={`border border-slate-400 p-1 font-mono font-bold ${dept.avgGap < 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
+                                    {dept.avgGap >= 0 ? `+${dept.avgGap}` : dept.avgGap}
+                                  </td>
+                                  <td className="border border-slate-400 p-1 font-mono font-semibold">
+                                    {dept.avgProductivity}%
+                                  </td>
+                                  <td className="border border-slate-400 p-1 font-mono">
+                                    {dept.understaffedDays} วัน
+                                  </td>
+                                </tr>
+                              ))}
+                              <tr className="bg-slate-100 font-bold text-center border-t-2 border-slate-600">
+                                <td className="border border-slate-400 p-1 text-right pr-2 font-bold">รวมทั้งโรงพยาบาล</td>
+                                <td className="border border-slate-400 p-1 font-mono font-bold bg-emerald-100 text-emerald-950">
+                                  {aggregateMetrics.totalTNH}
+                                </td>
+                                <td className="border border-slate-400 p-1 font-mono font-bold">100.0%</td>
+                                <td className="border border-slate-400 p-1 font-mono font-bold">{aggregateMetrics.totalDirect}</td>
+                                <td className="border border-slate-400 p-1 font-mono font-bold">{aggregateMetrics.totalIndirect}</td>
+                                <td className="border border-slate-400 p-1 font-mono font-bold">{aggregateMetrics.totalSupport}</td>
+                                <td className="border border-slate-400 p-1 font-mono font-bold">
+                                  {aggregateMetrics.avgActualStaff}/{aggregateMetrics.avgRequiredStaff}
+                                </td>
+                                <td className={`border border-slate-400 p-1 font-mono font-bold ${aggregateMetrics.avgGap < 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
+                                  {aggregateMetrics.avgGap >= 0 ? `+${aggregateMetrics.avgGap}` : aggregateMetrics.avgGap}
+                                </td>
+                                <td className="border border-slate-400 p-1 font-mono font-bold text-purple-900">
+                                  {aggregateMetrics.avgProductivity}%
+                                </td>
+                                <td className="border border-slate-400 p-1 font-mono font-bold text-rose-600">
+                                  {aggregateMetrics.understaffedDays} วัน
+                                </td>
+                              </tr>
+                            </tbody>
+                          </table>
                         </div>
-                        <div className="space-y-6">
-                          <div>ลงชื่อ..........................................................</div>
-                          <div>
-                            <p className="font-semibold">(นายแพทย์จิรวัฒน์   วงษ์สวัสดิ์)</p>
-                            <p className="text-slate-600 text-[9.5px]">ผู้อำนวยการโรงพยาบาลสังขละบุรี</p>
+
+                        <div>
+                          <div className="text-[10.5px] font-bold text-slate-900 mb-1 flex items-center justify-between">
+                            <span>2. ตารางสถิติแนวโน้มรายวันรวมทั้งโรงพยาบาล</span>
+                            <span className="text-[9px] text-slate-500">จำนวนบันทึก: {displayedRecords.length} วัน</span>
                           </div>
+                          <table className="w-full border-collapse border border-slate-400 text-[9px]">
+                            <thead>
+                              <tr className="bg-slate-100 font-bold text-center">
+                                <th className="border border-slate-400 p-1">วันที่</th>
+                                <th className="border border-slate-400 p-1">งานหลัก</th>
+                                <th className="border border-slate-400 p-1">งานรอง</th>
+                                <th className="border border-slate-400 p-1">งานหนุน</th>
+                                <th className="border border-slate-400 p-1 bg-emerald-50">TNH รวม</th>
+                                <th className="border border-slate-400 p-1">จริง/ควรมี</th>
+                                <th className="border border-slate-400 p-1">Gap</th>
+                                <th className="border border-slate-400 p-1">ผลิตภาพ</th>
+                                <th className="border border-slate-400 p-1">สถานะ</th>
+                                <th className="border border-slate-400 p-1">ผู้ตรวจนับ</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {displayedRecords.map((r) => {
+                                const c = calculateHospitalOverall(r, standardsConfig);
+                                return (
+                                  <tr key={r.id} className="text-center hover:bg-slate-50">
+                                    <td className="border border-slate-400 p-1 font-mono">{r.date}</td>
+                                    <td className="border border-slate-400 p-1 font-mono">{c.totalDirectCareHours}</td>
+                                    <td className="border border-slate-400 p-1 font-mono">{c.totalIndirectCareHours}</td>
+                                    <td className="border border-slate-400 p-1 font-mono">{c.totalSupportCareHours}</td>
+                                    <td className="border border-slate-400 p-1 font-mono font-bold bg-emerald-50/50">{c.totalNursingHours}</td>
+                                    <td className="border border-slate-400 p-1 font-mono">{c.totalActualStaff}/{c.totalRequiredStaff}</td>
+                                    <td className="border border-slate-400 p-1 font-mono font-bold">{c.overallGap >= 0 ? `+${c.overallGap}` : c.overallGap}</td>
+                                    <td className="border border-slate-400 p-1 font-mono">{c.averageProductivityRate}%</td>
+                                    <td className="border border-slate-400 p-1 text-[9px]">
+                                      {c.overallStatus === 'balanced' ? 'พอเหมาะ' : c.overallStatus === 'understaffed' ? 'ขาดแคลน' : 'เกินเกณฑ์'}
+                                    </td>
+                                    <td className="border border-slate-400 p-1 text-left truncate max-w-[90px]">{r.recorderName || '-'}</td>
+                                  </tr>
+                                );
+                              })}
+                            </tbody>
+                          </table>
                         </div>
                       </div>
+                    ) : (
+                      // Section for Specific Department Daily Breakdown
+                      <div>
+                        <div className="text-[10.5px] font-bold text-slate-900 mb-1 flex items-center justify-between">
+                          <span>ตารางสถิติค่างานรายวัน แผนก{DEPARTMENT_NAMES[selectedDepartmentFilter as DepartmentKey]}</span>
+                          <span className="text-[9px] text-slate-500">จำนวนบันทึก: {displayedRecords.length} วัน</span>
+                        </div>
+                        <table className="w-full border-collapse border border-slate-400 text-[9px]">
+                          <thead>
+                            <tr className="bg-slate-100 font-bold text-center">
+                              <th className="border border-slate-400 p-1 w-[12%]">วันที่</th>
+                              <th className="border border-slate-400 p-1 text-left w-[26%]">ปริมาณผู้รับบริการ / ครองเตียง</th>
+                              <th className="border border-slate-400 p-1 w-[9%]">งานหลัก</th>
+                              <th className="border border-slate-400 p-1 w-[9%]">งานรอง</th>
+                              <th className="border border-slate-400 p-1 w-[9%]">งานหนุน</th>
+                              <th className="border border-slate-400 p-1 w-[10%] bg-emerald-50">TNH รวม</th>
+                              <th className="border border-slate-400 p-1 w-[9%]">จริง/ควรมี</th>
+                              <th className="border border-slate-400 p-1 w-[7%]">Gap</th>
+                              <th className="border border-slate-400 p-1 w-[8%]">ผลิตภาพ</th>
+                              <th className="border border-slate-400 p-1 w-[9%]">ผู้ตรวจนับ</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {displayedRecords.map((r) => {
+                              const overall = calculateHospitalOverall(r, standardsConfig);
+                              const deptCalc = overall.departments[selectedDepartmentFilter as DepartmentKey];
+                              const censusText = getDeptCensusSummary(r, selectedDepartmentFilter as DepartmentKey);
+                              return (
+                                <tr key={r.id} className="text-center hover:bg-slate-50">
+                                  <td className="border border-slate-400 p-1 font-mono font-medium">{r.date}</td>
+                                  <td className="border border-slate-400 p-1 text-left text-[8.5px] text-slate-700">{censusText}</td>
+                                  <td className="border border-slate-400 p-1 font-mono">{deptCalc.directCareHours}</td>
+                                  <td className="border border-slate-400 p-1 font-mono">{deptCalc.indirectCareHours}</td>
+                                  <td className="border border-slate-400 p-1 font-mono">{deptCalc.supportCareHours}</td>
+                                  <td className="border border-slate-400 p-1 font-mono font-bold bg-emerald-50/50">{deptCalc.totalNursingHours}</td>
+                                  <td className="border border-slate-400 p-1 font-mono">{deptCalc.totalActualStaff}/{deptCalc.totalRequiredStaff}</td>
+                                  <td className={`border border-slate-400 p-1 font-mono font-bold ${deptCalc.staffingGap < 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
+                                    {deptCalc.staffingGap >= 0 ? `+${deptCalc.staffingGap}` : deptCalc.staffingGap}
+                                  </td>
+                                  <td className="border border-slate-400 p-1 font-mono">{deptCalc.productivityRate}%</td>
+                                  <td className="border border-slate-400 p-1 text-left truncate max-w-[85px]">{r.recorderName || '-'}</td>
+                                </tr>
+                              );
+                            })}
+                            <tr className="bg-slate-100 font-bold text-center border-t-2 border-slate-600">
+                              <td colSpan={2} className="border border-slate-400 p-1 text-right pr-2">
+                                รวม / เฉลี่ยประจำช่วง ({DEPARTMENT_NAMES[selectedDepartmentFilter as DepartmentKey]})
+                              </td>
+                              <td className="border border-slate-400 p-1 font-mono">{activeMetrics.totalDirect}</td>
+                              <td className="border border-slate-400 p-1 font-mono">{activeMetrics.totalIndirect}</td>
+                              <td className="border border-slate-400 p-1 font-mono">{activeMetrics.totalSupport}</td>
+                              <td className="border border-slate-400 p-1 font-mono font-bold bg-emerald-100 text-emerald-950">{activeMetrics.totalTNH}</td>
+                              <td className="border border-slate-400 p-1 font-mono">{activeMetrics.avgActualStaff}/{activeMetrics.avgRequiredStaff}</td>
+                              <td className={`border border-slate-400 p-1 font-mono font-bold ${activeMetrics.avgGap < 0 ? 'text-rose-600' : 'text-emerald-700'}`}>
+                                {activeMetrics.avgGap >= 0 ? `+${activeMetrics.avgGap}` : activeMetrics.avgGap}
+                              </td>
+                              <td className="border border-slate-400 p-1 font-mono font-bold text-purple-900">{activeMetrics.avgProductivity}%</td>
+                              <td className="border border-slate-400 p-1 text-[8.5px] text-slate-500">เฉลี่ยต่อวัน</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+
+                    {/* Signatures */}
+                    <div className="pt-6 border-t border-slate-300 text-center text-[10px]">
+                      {selectedDepartmentFilter !== 'all' ? (
+                        // 3 Signatures for Specific Department
+                        <div className="grid grid-cols-3 gap-4 max-w-xl mx-auto">
+                          <div className="space-y-6">
+                            <div>ลงชื่อ..........................................................</div>
+                            <div>
+                              <p className="font-semibold">หัวหน้างาน/หัวหน้าตึก</p>
+                              <p className="text-slate-600 text-[9px]">{DEPARTMENT_NAMES[selectedDepartmentFilter as DepartmentKey]}</p>
+                              <p className="text-slate-400 text-[8px]">วันที่ ....../....../......</p>
+                            </div>
+                          </div>
+                          <div className="space-y-6">
+                            <div>ลงชื่อ..........................................................</div>
+                            <div>
+                              <p className="font-semibold">(พว. หวานเพ็ญ   สาลี)</p>
+                              <p className="text-slate-600 text-[9px]">หัวหน้ากลุ่มงานการพยาบาล</p>
+                              <p className="text-slate-400 text-[8px]">วันที่ ....../....../......</p>
+                            </div>
+                          </div>
+                          <div className="space-y-6">
+                            <div>ลงชื่อ..........................................................</div>
+                            <div>
+                              <p className="font-semibold">(นายแพทย์จิรวัฒน์   วงษ์สวัสดิ์)</p>
+                              <p className="text-slate-600 text-[9px]">ผู้อำนวยการโรงพยาบาลสังขละบุรี</p>
+                              <p className="text-slate-400 text-[8px]">วันที่ ....../....../......</p>
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        // 2 Signatures for Hospital Overall
+                        <div className="grid grid-cols-2 gap-8 max-w-lg mx-auto">
+                          <div className="space-y-6">
+                            <div>ลงชื่อ..........................................................</div>
+                            <div>
+                              <p className="font-semibold">(พว. หวานเพ็ญ   สาลี)</p>
+                              <p className="text-slate-600 text-[9.5px]">หัวหน้ากลุ่มงานการพยาบาล</p>
+                              <p className="text-slate-400 text-[8.5px]">วันที่ ....../....../......</p>
+                            </div>
+                          </div>
+                          <div className="space-y-6">
+                            <div>ลงชื่อ..........................................................</div>
+                            <div>
+                              <p className="font-semibold">(นายแพทย์จิรวัฒน์   วงษ์สวัสดิ์)</p>
+                              <p className="text-slate-600 text-[9.5px]">ผู้อำนวยการโรงพยาบาลสังขละบุรี</p>
+                              <p className="text-slate-400 text-[8.5px]">วันที่ ....../....../......</p>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </div>
                 )}
@@ -1195,32 +1815,39 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
             {/* Aggregate Analytics KPI Cards */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
               <div className="p-3.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800">
-                <div className="text-[11px] text-slate-500">ค่างานรวม (TNH) ประจำช่วง</div>
+                <div className="text-[11px] text-slate-500">
+                  ค่างานรวม (TNH) {selectedDepartmentFilter !== 'all' ? `(${DEPARTMENT_NAMES[selectedDepartmentFilter as DepartmentKey]})` : 'รวม 5 แผนก'}
+                </div>
                 <div className="text-2xl font-extrabold font-mono text-emerald-600 dark:text-emerald-400 mt-1">
-                  {aggregateMetrics.totalTNH} <span className="text-xs font-normal">ชม.</span>
+                  {activeMetrics.totalTNH} <span className="text-xs font-normal">ชม.</span>
                 </div>
                 <div className="text-[10px] text-slate-400 mt-1">
-                  หลัก: {aggregateMetrics.totalDirect} • รอง: {aggregateMetrics.totalIndirect} • หนุน: {aggregateMetrics.totalSupport}
+                  หลัก: {activeMetrics.totalDirect} • รอง: {activeMetrics.totalIndirect} • หนุน: {activeMetrics.totalSupport}
                 </div>
               </div>
 
               <div className="p-3.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800">
-                <div className="text-[11px] text-slate-500">พยาบาลเฉลี่ย (จริง/ควรมี)</div>
+                <div className="text-[11px] text-slate-500">
+                  พยาบาลเฉลี่ย (จริง/ควรมี) {selectedDepartmentFilter !== 'all' ? `(${DEPARTMENT_NAMES[selectedDepartmentFilter as DepartmentKey]})` : ''}
+                </div>
                 <div className="text-2xl font-extrabold font-mono text-slate-900 dark:text-white mt-1">
-                  <span className="text-blue-600 dark:text-blue-400">{aggregateMetrics.avgActualStaff}</span>
+                  <span className="text-blue-600 dark:text-blue-400">{activeMetrics.avgActualStaff}</span>
                   <span className="text-slate-400 font-light"> / </span>
-                  {aggregateMetrics.avgRequiredStaff}
+                  {activeMetrics.avgRequiredStaff}
                   <span className="text-xs font-normal text-slate-400"> คน/วัน</span>
                 </div>
                 <div className="text-[10px] text-slate-400 mt-1">
-                  FTE เฉลี่ย: {aggregateMetrics.avgFTE} อัตรา
+                  Gap เฉลี่ย:{' '}
+                  <span className={activeMetrics.avgGap < 0 ? 'text-rose-600 font-bold' : 'text-emerald-600 font-bold'}>
+                    {activeMetrics.avgGap >= 0 ? `+${activeMetrics.avgGap}` : activeMetrics.avgGap} คน
+                  </span>
                 </div>
               </div>
 
               <div className="p-3.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800">
                 <div className="text-[11px] text-slate-500">อัตราผลิตภาพเฉลี่ย</div>
                 <div className="text-2xl font-extrabold font-mono text-purple-600 dark:text-purple-400 mt-1">
-                  {aggregateMetrics.avgProductivity}%
+                  {activeMetrics.avgProductivity}%
                 </div>
                 <div className="text-[10px] text-slate-400 mt-1">
                   เป้าหมายสภาฯ: 85 - 115%
@@ -1230,13 +1857,58 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
               <div className="p-3.5 rounded-xl bg-white dark:bg-slate-900 border border-slate-200/80 dark:border-slate-800">
                 <div className="text-[11px] text-slate-500">วันที่กำลังคนขาด/งานล้น</div>
                 <div className="text-2xl font-extrabold font-mono text-rose-600 dark:text-rose-400 mt-1">
-                  {aggregateMetrics.understaffedDays} <span className="text-xs font-normal">วัน</span>
+                  {activeMetrics.understaffedDays} <span className="text-xs font-normal">วัน</span>
                 </div>
                 <div className="text-[10px] text-slate-400 mt-1">
-                  จากทั้งหมด {aggregateMetrics.totalDays} วันที่บันทึก
+                  จากทั้งหมด {activeMetrics.totalDays} วันที่บันทึก
                 </div>
               </div>
             </div>
+
+            {/* 5-Department Overview Summary when 'all' is selected */}
+            {selectedDepartmentFilter === 'all' && (
+              <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200/80 dark:border-slate-800 p-4 shadow-xs">
+                <div className="text-xs font-bold text-slate-900 dark:text-white mb-2.5 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Building2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                    <span>สรุปเปรียบเทียบภาระงานและอัตรากำลัง 5 ฝ่ายงาน ({periodTitle})</span>
+                  </div>
+                  <span className="text-[11px] text-slate-400">คลิกที่ฝ่ายงานเพื่อดูรายงานเจาะลึกเฉพาะแผนก</span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5">
+                  {departmentSummariesList.map((dept) => (
+                    <button
+                      key={dept.key}
+                      onClick={() => setSelectedDepartmentFilter(dept.key)}
+                      className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/80 dark:border-slate-700/80 hover:border-emerald-500 dark:hover:border-emerald-500 transition-all cursor-pointer text-left group"
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-slate-900 dark:text-white group-hover:text-emerald-600 dark:group-hover:text-emerald-400">
+                          {dept.name}
+                        </span>
+                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300">
+                          {dept.tnhSharePercent}%
+                        </span>
+                      </div>
+                      <div className="mt-2 text-lg font-extrabold font-mono text-emerald-700 dark:text-emerald-400">
+                        {dept.totalTNH} <span className="text-[10px] font-normal text-slate-500">ชม.</span>
+                      </div>
+                      <div className="mt-1 text-[11px] text-slate-600 dark:text-slate-400">
+                        เฉลี่ย: <span className="font-semibold text-blue-600 dark:text-blue-400">{dept.avgActualStaff}</span>/{dept.avgRequiredStaff} คน
+                      </div>
+                      <div className="mt-0.5 flex items-center justify-between text-[10px]">
+                        <span className={dept.avgGap < 0 ? 'text-rose-600 font-bold' : 'text-emerald-600 font-bold'}>
+                          Gap: {dept.avgGap >= 0 ? `+${dept.avgGap}` : dept.avgGap}
+                        </span>
+                        <span className="font-semibold text-purple-600 dark:text-purple-400">
+                          {dept.avgProductivity}%
+                        </span>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Search & Filter Toolbar */}
             <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-white dark:bg-slate-900 p-3 rounded-2xl border border-slate-200/80 dark:border-slate-800">
@@ -1293,6 +1965,9 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                   <thead className="bg-slate-50 dark:bg-slate-800/80 border-b border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 font-semibold">
                     <tr>
                       <th className="py-3 px-3">วันที่</th>
+                      {selectedDepartmentFilter !== 'all' && (
+                        <th className="py-3 px-2 text-left">ปริมาณผู้รับบริการ / ครองเตียง ({DEPARTMENT_NAMES[selectedDepartmentFilter as DepartmentKey]})</th>
+                      )}
                       <th className="py-3 px-2 text-right">งานหลัก</th>
                       <th className="py-3 px-2 text-right">งานรอง</th>
                       <th className="py-3 px-2 text-right">งานหนุน</th>
@@ -1308,13 +1983,27 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-medium">
                     {displayedRecords.length === 0 ? (
                       <tr>
-                        <td colSpan={11} className="py-8 text-center text-slate-400 text-xs">
+                        <td colSpan={selectedDepartmentFilter !== 'all' ? 12 : 11} className="py-8 text-center text-slate-400 text-xs">
                           ไม่พบข้อมูลบันทึกสถิติในรอบเวลา {periodTitle}
                         </td>
                       </tr>
                     ) : (
                       displayedRecords.map((r) => {
-                        const c = calculateHospitalOverall(r, standardsConfig);
+                        const overall = calculateHospitalOverall(r, standardsConfig);
+                        const isSpecific = selectedDepartmentFilter !== 'all';
+                        const deptCalc = isSpecific ? overall.departments[selectedDepartmentFilter as DepartmentKey] : null;
+                        const censusText = isSpecific ? getDeptCensusSummary(r, selectedDepartmentFilter as DepartmentKey) : '';
+
+                        const directH = isSpecific ? deptCalc!.directCareHours : overall.totalDirectCareHours;
+                        const indirectH = isSpecific ? deptCalc!.indirectCareHours : overall.totalIndirectCareHours;
+                        const supportH = isSpecific ? deptCalc!.supportCareHours : overall.totalSupportCareHours;
+                        const tnh = isSpecific ? deptCalc!.totalNursingHours : overall.totalNursingHours;
+                        const actStaff = isSpecific ? deptCalc!.totalActualStaff : overall.totalActualStaff;
+                        const reqStaff = isSpecific ? deptCalc!.totalRequiredStaff : overall.totalRequiredStaff;
+                        const gapVal = isSpecific ? deptCalc!.staffingGap : overall.overallGap;
+                        const prodVal = isSpecific ? deptCalc!.productivityRate : overall.averageProductivityRate;
+                        const statusVal = isSpecific ? deptCalc!.status : overall.overallStatus;
+
                         return (
                           <tr
                             key={r.id}
@@ -1323,46 +2012,51 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                             <td className="py-3 px-3 font-mono font-bold text-slate-900 dark:text-white">
                               {r.date}
                             </td>
+                            {isSpecific && (
+                              <td className="py-3 px-2 text-left text-[11px] text-slate-600 dark:text-slate-300 max-w-[220px]">
+                                {censusText}
+                              </td>
+                            )}
                             <td className="py-3 px-2 text-right font-mono text-emerald-600 dark:text-emerald-400">
-                              {c.totalDirectCareHours}
+                              {directH}
                             </td>
                             <td className="py-3 px-2 text-right font-mono text-blue-600 dark:text-blue-400">
-                              {c.totalIndirectCareHours}
+                              {indirectH}
                             </td>
                             <td className="py-3 px-2 text-right font-mono text-purple-600 dark:text-purple-400">
-                              {c.totalSupportCareHours}
+                              {supportH}
                             </td>
                             <td className="py-3 px-2.5 text-right font-mono font-bold text-slate-900 dark:text-white">
-                              {c.totalNursingHours}
+                              {tnh}
                             </td>
                             <td className="py-3 px-2 text-center font-mono">
-                              <span className="font-bold text-blue-600 dark:text-blue-400">{c.totalActualStaff}</span>
+                              <span className="font-bold text-blue-600 dark:text-blue-400">{actStaff}</span>
                               <span className="text-slate-400"> / </span>
-                              <span>{c.totalRequiredStaff}</span>
+                              <span>{reqStaff}</span>
                             </td>
                             <td className="py-3 px-2 text-center font-mono font-bold">
                               <span className={`px-1.5 py-0.5 rounded text-[11px] ${
-                                c.overallGap < 0
+                                gapVal < 0
                                   ? 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300'
-                                  : c.overallGap === 0
+                                  : gapVal === 0
                                   ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
                                   : 'bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300'
                               }`}>
-                                {c.overallGap >= 0 ? `+${c.overallGap}` : c.overallGap}
+                                {gapVal >= 0 ? `+${gapVal}` : gapVal}
                               </span>
                             </td>
                             <td className="py-3 px-2 text-center font-mono text-purple-600 dark:text-purple-400 font-semibold">
-                              {c.averageProductivityRate}%
+                              {prodVal}%
                             </td>
                             <td className="py-3 px-2 text-center">
                               <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${
-                                c.overallStatus === 'balanced'
+                                statusVal === 'balanced'
                                   ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
-                                  : c.overallStatus === 'understaffed'
+                                  : statusVal === 'understaffed'
                                   ? 'bg-rose-50 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300'
                                   : 'bg-amber-50 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300'
                               }`}>
-                                {c.overallStatus === 'balanced' ? '🟢 พอเหมาะ' : c.overallStatus === 'understaffed' ? '🔴 ขาดแคลน' : '🟡 เกิน'}
+                                {statusVal === 'balanced' ? '🟢 พอเหมาะ' : statusVal === 'understaffed' ? '🔴 ขาดแคลน' : '🟡 เกิน'}
                               </span>
                             </td>
                             <td className="py-3 px-3 text-slate-600 dark:text-slate-400 truncate max-w-[120px]">
@@ -1408,6 +2102,47 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                       })
                     )}
                   </tbody>
+                  {displayedRecords.length > 0 && (
+                    <tfoot className="bg-slate-100 dark:bg-slate-800/90 border-t-2 border-slate-300 dark:border-slate-700 font-bold text-slate-900 dark:text-white">
+                      <tr>
+                        <td colSpan={selectedDepartmentFilter !== 'all' ? 2 : 1} className="py-2.5 px-3 text-right">
+                          รวม / เฉลี่ย ({selectedDepartmentFilter !== 'all' ? DEPARTMENT_NAMES[selectedDepartmentFilter as DepartmentKey] : 'รวมทั้งโรงพยาบาล'}):
+                        </td>
+                        <td className="py-2.5 px-2 text-right font-mono text-emerald-600 dark:text-emerald-400">
+                          {activeMetrics.totalDirect}
+                        </td>
+                        <td className="py-2.5 px-2 text-right font-mono text-blue-600 dark:text-blue-400">
+                          {activeMetrics.totalIndirect}
+                        </td>
+                        <td className="py-2.5 px-2 text-right font-mono text-purple-600 dark:text-purple-400">
+                          {activeMetrics.totalSupport}
+                        </td>
+                        <td className="py-2.5 px-2.5 text-right font-mono font-extrabold text-slate-900 dark:text-white bg-emerald-50 dark:bg-emerald-950/40">
+                          {activeMetrics.totalTNH}
+                        </td>
+                        <td className="py-2.5 px-2 text-center font-mono">
+                          <span className="text-blue-600 dark:text-blue-400">{activeMetrics.avgActualStaff}</span>
+                          <span className="text-slate-400 font-light"> / </span>
+                          <span>{activeMetrics.avgRequiredStaff}</span>
+                        </td>
+                        <td className="py-2.5 px-2 text-center font-mono">
+                          <span className={`px-1.5 py-0.5 rounded text-[11px] ${
+                            activeMetrics.avgGap < 0
+                              ? 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300'
+                              : 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                          }`}>
+                            {activeMetrics.avgGap >= 0 ? `+${activeMetrics.avgGap}` : activeMetrics.avgGap}
+                          </span>
+                        </td>
+                        <td className="py-2.5 px-2 text-center font-mono text-purple-600 dark:text-purple-400">
+                          {activeMetrics.avgProductivity}%
+                        </td>
+                        <td colSpan={3} className="py-2.5 px-3 text-center text-[10px] text-slate-500 font-normal">
+                          เฉลี่ยต่อวัน • {activeMetrics.totalDays} วันที่บันทึก
+                        </td>
+                      </tr>
+                    </tfoot>
+                  )}
                 </table>
               </div>
             </div>
