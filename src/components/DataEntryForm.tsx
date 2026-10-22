@@ -211,13 +211,23 @@ export const DataEntryForm: React.FC<DataEntryFormProps> = ({
 
   React.useEffect(() => {
     const clone = JSON.parse(JSON.stringify(currentRecord));
-    if (!clone.recorderName && appUser) {
+    if ((!clone.recorderName || clone.recorderName === 'ผู้ตรวจนับ' || clone.recorderName === 'พยาบาลตรวจการเวร') && appUser?.name) {
       clone.recorderName = appUser.name;
       clone.recorderPosition = appUser.position || '';
       clone.recorderPhone = appUser.phone || '';
     }
     setFormData(clone);
   }, [currentRecord, appUser]);
+
+  const handleApplyLoginUserAsRecorder = () => {
+    if (!appUser?.name) return;
+    setFormData((prev) => ({
+      ...prev,
+      recorderName: appUser.name,
+      recorderPosition: appUser.position || prev.recorderPosition || '',
+      recorderPhone: appUser.phone || prev.recorderPhone || '',
+    }));
+  };
 
   // Helpers to get and set current active department data
   const currentDeptData = formData[activeDept.toLowerCase() as 'er' | 'opd' | 'ipd1' | 'ipd2' | 'lr'];
@@ -576,8 +586,14 @@ export const DataEntryForm: React.FC<DataEntryFormProps> = ({
 
   const handleSave = (e: React.FormEvent) => {
     e.preventDefault();
+    const finalRecorderName = formData.recorderName?.trim() || appUser?.name || '';
+    const finalRecorderPosition = formData.recorderPosition?.trim() || appUser?.position || '';
+    const finalRecorderPhone = formData.recorderPhone?.trim() || appUser?.phone || '';
     const updated = {
       ...formData,
+      recorderName: finalRecorderName,
+      recorderPosition: finalRecorderPosition,
+      recorderPhone: finalRecorderPhone,
       updatedAt: new Date().toISOString(),
     };
     onSaveRecord(updated);
@@ -658,17 +674,37 @@ export const DataEntryForm: React.FC<DataEntryFormProps> = ({
               />
             </div>
 
-            {/* Recorder Name */}
-            <div className="flex items-center gap-1.5 bg-slate-50 dark:bg-slate-800/80 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700">
-              <User className="w-3.5 h-3.5 text-slate-400" />
-              <input
-                type="text"
-                disabled={!canEditActiveDept}
-                placeholder="ชื่อพยาบาลผู้ตรวจนับ"
-                value={formData.recorderName || appUser?.name || ''}
-                onChange={(e) => setFormData({ ...formData, recorderName: e.target.value })}
-                className="text-xs font-medium bg-transparent text-slate-800 dark:text-slate-200 focus:outline-hidden w-36 sm:w-44 disabled:opacity-75"
-              />
+            {/* Recorder Name (ผู้ตรวจนับ) - แสดงชื่อผู้ตรวจนับตามการ Login */}
+            <div className="flex items-center gap-2 bg-slate-50 dark:bg-slate-800/80 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700">
+              <User className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <div className="flex flex-col">
+                <div className="flex items-center gap-1 text-[9.5px] text-slate-500 dark:text-slate-400 font-medium">
+                  <span>ผู้ตรวจนับ:</span>
+                  {appUser?.name && formData.recorderName === appUser.name && (
+                    <span className="text-[9px] px-1 py-0.2 rounded font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300">
+                      Login
+                    </span>
+                  )}
+                </div>
+                <input
+                  type="text"
+                  disabled={!canEditActiveDept}
+                  placeholder={`ชื่อพยาบาลผู้ตรวจนับ (${appUser?.name || ''})`}
+                  value={formData.recorderName}
+                  onChange={(e) => setFormData({ ...formData, recorderName: e.target.value })}
+                  className="text-xs font-semibold bg-transparent text-slate-800 dark:text-slate-200 focus:outline-hidden w-36 sm:w-44 disabled:opacity-75"
+                />
+              </div>
+              {appUser?.name && formData.recorderName !== appUser.name && canEditActiveDept && (
+                <button
+                  type="button"
+                  onClick={handleApplyLoginUserAsRecorder}
+                  title={`คลิกเพื่อตั้งชื่อผู้ตรวจนับตามผู้เข้าสู่ระบบ: ${appUser.name}`}
+                  className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 hover:bg-emerald-200 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300 font-semibold cursor-pointer shrink-0 transition-colors"
+                >
+                  ใช้ชื่อฉัน
+                </button>
+              )}
             </div>
           </div>
         </div>

@@ -225,9 +225,20 @@ export default function App() {
   const currentRecord = React.useMemo(() => {
     const found = records.find((r) => r.date === selectedDate);
     if (found) {
-      return mergeRecordWithActivityTemplates(found, activityTemplates);
+      const merged = mergeRecordWithActivityTemplates(found, activityTemplates);
+      if (!merged.recorderName && appUser?.name) {
+        merged.recorderName = appUser.name;
+        merged.recorderPosition = appUser.position || '';
+        merged.recorderPhone = appUser.phone || '';
+      }
+      return merged;
     }
-    const fresh = createNewDailyRecord(selectedDate, appUser?.name || '');
+    const fresh = createNewDailyRecord(
+      selectedDate,
+      appUser?.name || '',
+      appUser?.position || '',
+      appUser?.phone || ''
+    );
     return mergeRecordWithActivityTemplates(fresh, activityTemplates);
   }, [records, selectedDate, appUser, activityTemplates]);
 
@@ -264,7 +275,12 @@ export default function App() {
       setSelectedDate(dateStr);
       return;
     }
-    const newRec = createNewDailyRecord(dateStr, appUser?.name || '');
+    const newRec = createNewDailyRecord(
+      dateStr,
+      appUser?.name || '',
+      appUser?.position || '',
+      appUser?.phone || ''
+    );
     const merged = mergeRecordWithActivityTemplates(newRec, activityTemplates);
     const updated = [merged, ...records];
     setRecords(updated);
@@ -531,10 +547,6 @@ export default function App() {
         onSaveStandards={handleSaveStandards}
         onResetStandards={handleResetStandards}
         onClearAllRecords={handleClearAllRecords}
-        activityTemplates={activityTemplates}
-        onSaveActivityTemplate={handleSaveActivityTemplate}
-        onDeleteActivityTemplate={handleDeleteActivityTemplate}
-        onSyncAllDatesWithTemplates={handleSyncAllDatesWithTemplates}
       />
 
       <CalculationReferenceModal

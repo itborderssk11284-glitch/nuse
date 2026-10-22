@@ -400,14 +400,19 @@ export function mergeRecordWithActivityTemplates(
 }
 
 // Create a clean blank new daily record with all counts set to 0 for real data entry
-export function createNewDailyRecord(dateStr: string, recorderName = ''): DailyRecord {
+export function createNewDailyRecord(
+  dateStr: string,
+  recorderName = '',
+  recorderPosition = '',
+  recorderPhone = ''
+): DailyRecord {
   const templates = loadActivityTemplates();
   return {
     id: `sk-rec-${dateStr}`,
     date: dateStr,
     recorderName,
-    recorderPosition: '',
-    recorderPhone: '',
+    recorderPosition,
+    recorderPhone,
     notes: '',
     shiftType: 'all_day',
     er: {

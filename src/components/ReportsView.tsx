@@ -27,6 +27,8 @@ import {
   ArrowRight,
   ShieldCheck,
   Building2,
+  UserCheck,
+  User,
 } from 'lucide-react';
 
 export type ReportPeriodType = 'daily' | 'monthly' | 'yearly';
@@ -135,6 +137,31 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
     if (!dailyRecord) return null;
     return calculateHospitalOverall(dailyRecord, standardsConfig);
   }, [dailyRecord, standardsConfig]);
+
+  // ลิงก์ชื่อผู้ตรวจนับ / พยาบาลตรวจการเวรผู้จัดทำ ตามชื่อที่ Login (appUser)
+  const [dailySignerSource, setDailySignerSource] = useState<'login' | 'record'>('login');
+
+  const dailySupervisorSignerName = useMemo(() => {
+    if (dailySignerSource === 'login' && appUser?.name) {
+      return appUser.name;
+    }
+    return dailyRecord?.recorderName || appUser?.name || 'พยาบาลตรวจการเวร';
+  }, [dailySignerSource, appUser, dailyRecord]);
+
+  const dailySupervisorPosition = useMemo(() => {
+    if (dailySignerSource === 'login' && appUser?.position) {
+      return appUser.position;
+    }
+    return dailyRecord?.recorderPosition || appUser?.position || 'พยาบาลตรวจการเวร';
+  }, [dailySignerSource, appUser, dailyRecord]);
+
+  // ลิงก์ชื่อหัวหน้างาน/หัวหน้าตึกตามการ Login สำหรับรายงานแยกรายแผนก
+  const deptHeadSignerName = useMemo(() => {
+    if (appUser && appUser.role === 'department_head' && appUser.department === selectedDepartmentFilter) {
+      return appUser.name;
+    }
+    return '..........................................................';
+  }, [appUser, selectedDepartmentFilter]);
 
   // Apply search and status filter for table list
   const displayedRecords = useMemo(() => {
@@ -544,7 +571,10 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                   <div className="text-[10px] text-gray-700 font-mono mt-0.5">
                     วันที่: {new Date(dailyRecord.date).toLocaleDateString('th-TH', { dateStyle: 'long' })}
                   </div>
-                  <div className="text-[9px] text-gray-500">
+                  <div className="text-[9px] text-gray-700 font-medium">
+                    ผู้ตรวจนับ: <span className="font-semibold">{dailySupervisorSignerName}</span>
+                  </div>
+                  <div className="text-[8.5px] text-gray-500">
                     เวลาออกรายงาน: {new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })} น.
                   </div>
                 </div>
@@ -703,7 +733,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                 <div className="space-y-6">
                   <div>ลงชื่อ..........................................................</div>
                   <div>
-                    <p className="font-semibold">({dailyRecord.recorderName || 'พยาบาลตรวจการเวร'})</p>
+                    <p className="font-semibold">({dailySupervisorSignerName})</p>
                     <p className="text-gray-600 text-[9px]">พยาบาลตรวจการเวรผู้จัดทำ</p>
                     <p className="text-gray-400 text-[8.5px]">วันที่ ....../....../......</p>
                   </div>
@@ -894,7 +924,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                           <td className="border border-gray-400 p-0.5 text-[8.5px]">
                             {c.overallStatus === 'balanced' ? 'พอเหมาะ' : c.overallStatus === 'understaffed' ? 'ขาดแคลน' : 'เกินเกณฑ์'}
                           </td>
-                          <td className="border border-gray-400 p-0.5 text-left truncate max-w-[90px]">{r.recorderName || '-'}</td>
+                          <td className="border border-gray-400 p-0.5 text-left truncate max-w-[90px]">{r.recorderName || appUser?.name || '-'}</td>
                         </tr>
                       );
                     })}
@@ -943,7 +973,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                           <td className="border border-gray-400 p-0.5 text-[8.5px]">
                             {d.status === 'balanced' ? '🟢 พอเหมาะ' : d.status === 'understaffed' ? '🔴 ขาดแคลน' : '🟡 เกินเกณฑ์'}
                           </td>
-                          <td className="border border-gray-400 p-0.5 text-left truncate max-w-[85px]">{r.recorderName || '-'}</td>
+                          <td className="border border-gray-400 p-0.5 text-left truncate max-w-[85px]">{r.recorderName || appUser?.name || '-'}</td>
                         </tr>
                       );
                     })}
@@ -975,8 +1005,9 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                   <div className="space-y-6">
                     <div>ลงชื่อ..........................................................</div>
                     <div>
-                      <p className="font-semibold">หัวหน้างาน/หัวหน้าตึก</p>
-                      <p className="text-gray-600 text-[9px]">{DEPARTMENT_NAMES[selectedDepartmentFilter as DepartmentKey]}</p>
+                      <p className="font-semibold">({deptHeadSignerName})</p>
+                      <p className="text-gray-600 text-[9px]">หัวหน้างาน/หัวหน้าตึก</p>
+                      <p className="text-gray-400 text-[8px]">{DEPARTMENT_NAMES[selectedDepartmentFilter as DepartmentKey]}</p>
                       <p className="text-gray-400 text-[8px]">วันที่ ....../....../......</p>
                     </div>
                   </div>
@@ -1207,6 +1238,54 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
               </div>
             </div>
 
+            {/* Daily Supervisor Signer Link Status & Options */}
+            {periodType === 'daily' && (
+              <div className="flex flex-wrap items-center justify-between gap-2 p-2.5 rounded-xl bg-emerald-50/90 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 text-xs">
+                <div className="flex items-center gap-2">
+                  <UserCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+                  <span className="font-bold text-emerald-950 dark:text-emerald-200">
+                    ชื่อพยาบาลตรวจการเวรผู้จัดทำ (ผู้ลงนามรายวัน):
+                  </span>
+                  <span className="font-bold text-emerald-900 dark:text-emerald-100 bg-white dark:bg-slate-800 px-2.5 py-0.5 rounded-lg border border-emerald-300 dark:border-emerald-700 shadow-2xs font-sans">
+                    {dailySupervisorSignerName}
+                  </span>
+                  {appUser?.name && (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/80 text-emerald-800 dark:text-emerald-300 font-semibold border border-emerald-200 dark:border-emerald-700">
+                      ✓ ลิงก์ตามผู้ใช้งาน Login ({appUser.name})
+                    </span>
+                  )}
+                </div>
+
+                {appUser?.name && dailyRecord?.recorderName && dailyRecord.recorderName !== appUser.name && (
+                  <div className="flex items-center gap-1.5 text-[11px]">
+                    <span className="text-slate-500 dark:text-slate-400">เลือกชื่อผู้ลงนาม:</span>
+                    <button
+                      type="button"
+                      onClick={() => setDailySignerSource('login')}
+                      className={`px-2 py-0.5 rounded-md font-medium cursor-pointer transition-all ${
+                        dailySignerSource === 'login'
+                          ? 'bg-emerald-600 text-white font-bold shadow-2xs'
+                          : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700'
+                      }`}
+                    >
+                      ผู้ล็อกอิน ({appUser.name})
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDailySignerSource('record')}
+                      className={`px-2 py-0.5 rounded-md font-medium cursor-pointer transition-all ${
+                        dailySignerSource === 'record'
+                          ? 'bg-emerald-600 text-white font-bold shadow-2xs'
+                          : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700'
+                      }`}
+                    >
+                      ผู้ตรวจนับในเวร ({dailyRecord.recorderName})
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Quick Department Filter Pills */}
             <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-slate-100 dark:border-slate-800/80">
               <span className="text-xs text-slate-500 dark:text-slate-400 font-medium mr-1">แยกดูรายแผนก:</span>
@@ -1328,8 +1407,13 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                           <div className="text-[10.5px] text-slate-800 font-mono font-bold mt-1">
                             {new Date(dailyRecord.date).toLocaleDateString('th-TH', { dateStyle: 'long' })}
                           </div>
-                          <div className="text-[9.5px] text-slate-500">
-                            ผู้บันทึก: {dailyRecord.recorderName || 'พยาบาลตรวจการเวร'}
+                          <div className="text-[9.5px] text-slate-600 font-medium mt-0.5">
+                            ผู้ตรวจนับ: <span className="font-bold text-slate-900">{dailySupervisorSignerName}</span>
+                            {appUser?.name && dailySupervisorSignerName === appUser.name && (
+                              <span className="ml-1 text-[8.5px] px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-800 font-bold border border-emerald-300">
+                                Login
+                              </span>
+                            )}
                           </div>
                         </div>
                       </div>
@@ -1478,7 +1562,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                         <div className="space-y-7">
                           <div>ลงชื่อ..........................................................</div>
                           <div>
-                            <p className="font-semibold">({dailyRecord.recorderName || 'พยาบาลตรวจการเวร'})</p>
+                            <p className="font-semibold">({dailySupervisorSignerName})</p>
                             <p className="text-slate-600 text-[9.5px]">พยาบาลตรวจการเวรผู้จัดทำ</p>
                             <p className="text-slate-400 text-[9px]">วันที่ ....../....../......</p>
                           </div>
@@ -1676,7 +1760,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                                     <td className="border border-slate-400 p-1 text-[9px]">
                                       {c.overallStatus === 'balanced' ? 'พอเหมาะ' : c.overallStatus === 'understaffed' ? 'ขาดแคลน' : 'เกินเกณฑ์'}
                                     </td>
-                                    <td className="border border-slate-400 p-1 text-left truncate max-w-[90px]">{r.recorderName || '-'}</td>
+                                    <td className="border border-slate-400 p-1 text-left truncate max-w-[90px]">{r.recorderName || appUser?.name || '-'}</td>
                                   </tr>
                                 );
                               })}
@@ -1724,7 +1808,7 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                                     {deptCalc.staffingGap >= 0 ? `+${deptCalc.staffingGap}` : deptCalc.staffingGap}
                                   </td>
                                   <td className="border border-slate-400 p-1 font-mono">{deptCalc.productivityRate}%</td>
-                                  <td className="border border-slate-400 p-1 text-left truncate max-w-[85px]">{r.recorderName || '-'}</td>
+                                  <td className="border border-slate-400 p-1 text-left truncate max-w-[85px]">{r.recorderName || appUser?.name || '-'}</td>
                                 </tr>
                               );
                             })}
@@ -1756,8 +1840,9 @@ export const ReportsView: React.FC<ReportsViewProps> = ({
                           <div className="space-y-6">
                             <div>ลงชื่อ..........................................................</div>
                             <div>
-                              <p className="font-semibold">หัวหน้างาน/หัวหน้าตึก</p>
-                              <p className="text-slate-600 text-[9px]">{DEPARTMENT_NAMES[selectedDepartmentFilter as DepartmentKey]}</p>
+                              <p className="font-semibold">({deptHeadSignerName})</p>
+                              <p className="text-slate-600 text-[9px]">หัวหน้างาน/หัวหน้าตึก</p>
+                              <p className="text-slate-400 text-[8px]">{DEPARTMENT_NAMES[selectedDepartmentFilter as DepartmentKey]}</p>
                               <p className="text-slate-400 text-[8px]">วันที่ ....../....../......</p>
                             </div>
                           </div>
